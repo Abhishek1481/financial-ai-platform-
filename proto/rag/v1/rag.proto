@@ -1,0 +1,62 @@
+syntax = "proto3";
+
+package financial.ai.platform.rag.v1;
+
+import "common/v1/common.proto";
+
+option go_package = "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/rag/v1;ragv1";
+
+// RAGService is the core "ask a question" surface. Query is server-streaming
+// so gateway-go can relay tokens to the client over SSE as they're
+// generated, instead of buffering a full LLM response before the user sees
+// anything — this is the reason Go<->Python communication had to support
+// streaming, not just request/response.
+service RAGService {
+  rpc Query(QueryRequest) returns (stream QueryResponseChunk);
+  rpc Summarize(SummarizeRequest) returns (SummarizeResponse);
+}
+
+message QueryRequest {
+  string session_id = 1; // empty = no conversation memory, single-shot question
+  string question = 2;
+  repeated financial.ai.platform.common.v1.ConversationTurn history = 3;
+  financial.ai.platform.common.v1.MetadataFilter filter = 4;
+  int32 top_k = 5; // 0 = use service default
+}
+
+// QueryResponseChunk is a discriminated union: every message before the
+// last carries a `token`; the final message carries `final` with citations,
+// usage, and latency — this lets gateway-go stream tokens verbatim to the
+// client while still getting one authoritative summary message at the end.
+message QueryResponseChunk {
+  oneof payload {
+    string token = 1;
+    QueryFinal final = 2;
+  }
+}
+
+message QueryFinal {
+  repeated financial.ai.platform.common.v1.Citation citations = 1;
+  financial.ai.platform.common.v1.TokenUsage usage = 2;
+  float latency_ms = 3;
+}
+
+enum SummaryType {
+  SUMMARY_TYPE_UNSPECIFIED = 0;
+  SUMMARY_TYPE_EXECUTIVE = 1;
+  SUMMARY_TYPE_RISK = 2;
+  SUMMARY_TYPE_REVENUE = 3;
+  SUMMARY_TYPE_SENTIMENT = 4;
+}
+
+message SummarizeRequest {
+  string document_id = 1;
+  SummaryType type = 2;
+}
+
+message SummarizeResponse {
+  string summary = 1;
+  repeated financial.ai.platform.common.v1.Citation citations = 2;
+  financial.ai.platform.common.v1.TokenUsage usage = 3;
+  float latency_ms = 4;
+}

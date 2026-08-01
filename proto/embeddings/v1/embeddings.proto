@@ -1,0 +1,68 @@
+syntax = "proto3";
+
+package financial.ai.platform.embeddings.v1;
+
+import "common/v1/common.proto";
+
+option go_package = "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/embeddings/v1;embeddingsv1";
+
+// EmbeddingService owns chunking, embedding generation, and vector store
+// upserts. ChunkAndEmbed is server-streaming because a large SEC filing can
+// produce thousands of chunks — the worker that called it reports live
+// progress to the job's status row instead of blocking on one giant
+// response.
+service EmbeddingService {
+  rpc ChunkAndEmbed(ChunkAndEmbedRequest) returns (stream ChunkAndEmbedProgress);
+
+  // DeleteDocumentEmbeddings removes every chunk/vector belonging to a
+  // document — used on re-ingestion (replace) and hard deletes.
+  rpc DeleteDocumentEmbeddings(DeleteDocumentEmbeddingsRequest) returns (DeleteDocumentEmbeddingsResponse);
+
+  // CheckDuplicateChunk lets the pipeline skip re-embedding content that's
+  // already in the vector store (e.g. boilerplate legal language repeated
+  // across filings), keyed by content hash rather than re-running the model.
+  rpc CheckDuplicateChunk(CheckDuplicateChunkRequest) returns (CheckDuplicateChunkResponse);
+}
+
+message ChunkAndEmbedRequest {
+  string document_id = 1;
+  string raw_text = 2;
+  financial.ai.platform.common.v1.FinancialMetadata metadata = 3;
+  int32 chunk_size_tokens = 4;   // 0 = use service default
+  int32 chunk_overlap_tokens = 5; // 0 = use service default
+}
+
+enum EmbedStage {
+  EMBED_STAGE_UNSPECIFIED = 0;
+  EMBED_STAGE_CHUNKING = 1;
+  EMBED_STAGE_DEDUPING = 2;
+  EMBED_STAGE_EMBEDDING = 3;
+  EMBED_STAGE_UPSERTING = 4;
+  EMBED_STAGE_COMPLETE = 5;
+}
+
+message ChunkAndEmbedProgress {
+  EmbedStage stage = 1;
+  int32 chunks_total = 2;
+  int32 chunks_processed = 3;
+  int32 chunks_skipped_duplicate = 4;
+  // Populated only on the final message (stage == EMBED_STAGE_COMPLETE).
+  repeated string chunk_ids = 5;
+}
+
+message DeleteDocumentEmbeddingsRequest {
+  string document_id = 1;
+}
+
+message DeleteDocumentEmbeddingsResponse {
+  int32 chunks_deleted = 1;
+}
+
+message CheckDuplicateChunkRequest {
+  string content_hash = 1;
+}
+
+message CheckDuplicateChunkResponse {
+  bool is_duplicate = 1;
+  string existing_chunk_id = 2;
+}

@@ -6,7 +6,7 @@ it's clear what's real vs. planned at any point in time.
 
 - [x] **Phase 1 — Repo scaffolding.** Folder structure, root README,
       architecture doc, this roadmap, git init.
-- [ ] **Phase 2 — Protobuf contracts.** The gRPC interface between
+- [x] **Phase 2 — Protobuf contracts.** The gRPC interface between
       `gateway-go` and `ml-service`, defined before either service is built
       against it.
 - [ ] **Phase 3 — `ml-service` skeleton.** gRPC server, config, health

@@ -1,0 +1,55 @@
+syntax = "proto3";
+
+package financial.ai.platform.evaluation.v1;
+
+import "common/v1/common.proto";
+
+option go_package = "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/evaluation/v1;evaluationv1";
+
+// EvaluationService scores RAG answers against the context that was
+// retrieved for them (and, when available, a ground-truth answer). It is
+// called both online (sampled production traffic, for drift monitoring) and
+// offline (batch, against a fixed eval set in CI) — hence BatchEvaluate as
+// a client-streaming RPC for the offline case.
+service EvaluationService {
+  rpc EvaluateAnswer(EvaluateAnswerRequest) returns (EvaluateAnswerResponse);
+
+  // BatchEvaluate scores a stream of question/answer/context triples and
+  // returns aggregate statistics — used by the CI eval-regression gate.
+  rpc BatchEvaluate(stream EvaluateAnswerRequest) returns (BatchEvaluateResponse);
+}
+
+message EvaluateAnswerRequest {
+  string question = 1;
+  string answer = 2;
+  repeated financial.ai.platform.common.v1.Chunk retrieved_context = 3;
+  string ground_truth_answer = 4; // optional; empty when unavailable
+  float generation_latency_ms = 5;
+  financial.ai.platform.common.v1.TokenUsage usage = 6;
+}
+
+message EvaluateAnswerResponse {
+  // Faithfulness: fraction of claims in `answer` that are supported by
+  // `retrieved_context` — the core hallucination-detection signal.
+  float faithfulness = 1;
+  // Context precision: fraction of `retrieved_context` that was actually
+  // relevant to `question`.
+  float context_precision = 2;
+  // Context recall: only computed when `ground_truth_answer` is set —
+  // fraction of the ground-truth answer's claims that are covered by
+  // `retrieved_context`.
+  float context_recall = 3;
+  float hallucination_score = 4; // 0 = fully grounded, 1 = fully hallucinated
+  float answer_relevancy = 5;
+}
+
+message BatchEvaluateResponse {
+  int32 samples_evaluated = 1;
+  float mean_faithfulness = 2;
+  float mean_context_precision = 3;
+  float mean_context_recall = 4;
+  float mean_hallucination_score = 5;
+  float mean_answer_relevancy = 6;
+  float p50_latency_ms = 7;
+  float p95_latency_ms = 8;
+}

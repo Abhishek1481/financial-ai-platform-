@@ -1,0 +1,18 @@
+version: v2
+# Generated code is never committed (see /.gitignore -> proto/gen/) — every
+# service regenerates its stubs from these contracts via `make proto`, so
+# the .proto files stay the single source of truth and can't drift from
+# checked-in generated code.
+plugins:
+  - remote: buf.build/protocolbuffers/go
+    out: gen/go
+    opt: paths=source_relative
+  - remote: buf.build/grpc/go
+    out: gen/go
+    opt: paths=source_relative
+  - remote: buf.build/protocolbuffers/python
+    out: gen/python
+  - remote: buf.build/grpc/python
+    out: gen/python
+  - remote: buf.build/protocolbuffers/pyi
+    out: gen/python

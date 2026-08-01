@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package financial.ai.platform.ingestion.v1;
+
+import "common/v1/common.proto";
+
+option go_package = "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/ingestion/v1;ingestionv1";
+
+// IngestionService extracts text, tables, and metadata from a raw document
+// already written to object storage. It is invoked by a `worker` (Go) job,
+// never directly by gateway-go — extraction can be slow (large PDFs, SEC
+// filings with hundreds of pages) and belongs behind the job queue, not on
+// a request/response path a client is waiting on.
+service IngestionService {
+  // ExtractDocument reads the object at `s3_uri`, runs format-specific
+  // extraction, and returns raw text, tables, and any metadata it can infer
+  // from the document itself (e.g. parsing a 10-K cover page for ticker and
+  // fiscal period).
+  rpc ExtractDocument(ExtractDocumentRequest) returns (ExtractDocumentResponse);
+}
+
+message ExtractDocumentRequest {
+  string document_id = 1;
+  string s3_uri = 2;
+  financial.ai.platform.common.v1.DocumentType doc_type = 3;
+}
+
+message ExtractedTableCell {
+  string value = 1;
+  bool is_numeric = 2;
+}
+
+message ExtractedTableRow {
+  repeated ExtractedTableCell cells = 1;
+}
+
+message ExtractedTable {
+  repeated string headers = 1;
+  repeated ExtractedTableRow rows = 2;
+  string caption = 3;
+  int32 page_number = 4;
+}
+
+message ExtractDocumentResponse {
+  string raw_text = 1;
+  repeated ExtractedTable tables = 2;
+  financial.ai.platform.common.v1.FinancialMetadata inferred_metadata = 3;
+  int32 page_count = 4;
+}

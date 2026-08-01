@@ -1,0 +1,90 @@
+syntax = "proto3";
+
+package financial.ai.platform.common.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/common/v1;commonv1";
+
+// DocumentType enumerates the source formats the ingestion pipeline accepts.
+enum DocumentType {
+  DOCUMENT_TYPE_UNSPECIFIED = 0;
+  DOCUMENT_TYPE_PDF = 1;
+  DOCUMENT_TYPE_DOCX = 2;
+  DOCUMENT_TYPE_HTML = 3;
+  DOCUMENT_TYPE_TXT = 4;
+  DOCUMENT_TYPE_SEC_FILING = 5; // structured EDGAR filing (10-K, 10-Q, 8-K, etc.)
+}
+
+// FinancialMetadata carries the domain-specific fields every downstream
+// service (search filtering, RAG citations, evaluation) keys off of, so it
+// lives in common rather than being duplicated per-service.
+message FinancialMetadata {
+  string ticker = 1;
+  string company_name = 2;
+  string filing_type = 3;       // e.g. "10-K", "10-Q", "8-K", "EARNINGS_CALL", "NEWS"
+  string fiscal_period = 4;     // e.g. "FY2025-Q1"
+  string source_url = 5;
+  google.protobuf.Timestamp filed_at = 6;
+}
+
+// Document is the canonical representation of an ingested source document.
+message Document {
+  string document_id = 1;
+  string s3_uri = 2;
+  DocumentType doc_type = 3;
+  FinancialMetadata metadata = 4;
+  string content_hash = 5; // sha256 of raw bytes, used for dedup
+  google.protobuf.Timestamp ingested_at = 6;
+}
+
+// Chunk is a single embedded unit of a document — the retrieval atom.
+message Chunk {
+  string chunk_id = 1;
+  string document_id = 2;
+  string text = 3;
+  int32 chunk_index = 4;
+  int32 page_number = 5;      // 0 if not applicable (e.g. HTML source)
+  string content_hash = 6;    // sha256 of chunk text, used for dedup
+  FinancialMetadata metadata = 7;
+}
+
+// Citation ties a generated answer back to the exact chunk it came from.
+message Citation {
+  string chunk_id = 1;
+  string document_id = 2;
+  string quote = 3;
+  int32 page_number = 4;
+  string source_url = 5;
+}
+
+// ConversationRole distinguishes turns in a multi-turn RAG session.
+enum ConversationRole {
+  CONVERSATION_ROLE_UNSPECIFIED = 0;
+  CONVERSATION_ROLE_USER = 1;
+  CONVERSATION_ROLE_ASSISTANT = 2;
+}
+
+message ConversationTurn {
+  ConversationRole role = 1;
+  string content = 2;
+  google.protobuf.Timestamp created_at = 3;
+}
+
+// TokenUsage is returned by every LLM-invoking RPC so gateway-go can log
+// cost/usage metrics without ml-service owning any billing logic.
+message TokenUsage {
+  int32 prompt_tokens = 1;
+  int32 completion_tokens = 2;
+  int32 total_tokens = 3;
+}
+
+// MetadataFilter is shared by SearchService and RAGService so filtering
+// semantics never drift between "search" and "ask a question" call paths.
+message MetadataFilter {
+  repeated string tickers = 1;
+  repeated string filing_types = 2;
+  string fiscal_period = 3;
+  google.protobuf.Timestamp filed_after = 4;
+  google.protobuf.Timestamp filed_before = 5;
+}

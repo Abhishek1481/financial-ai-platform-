@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package financial.ai.platform.search.v1;
+
+import "common/v1/common.proto";
+
+option go_package = "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/search/v1;searchv1";
+
+// SearchService is called directly by gateway-go on the query path (not via
+// the job queue) — it must be fast, since it's on the critical path of an
+// interactive request.
+service SearchService {
+  rpc Search(SearchRequest) returns (SearchResponse);
+}
+
+enum SearchMode {
+  SEARCH_MODE_UNSPECIFIED = 0;
+  SEARCH_MODE_SEMANTIC = 1; // pure vector cosine-similarity search
+  SEARCH_MODE_KEYWORD = 2;  // BM25 / lexical search
+  SEARCH_MODE_HYBRID = 3;   // reciprocal-rank fusion of both
+}
+
+message SearchRequest {
+  string query = 1;
+  int32 top_k = 2;
+  SearchMode mode = 3;
+  financial.ai.platform.common.v1.MetadataFilter filter = 4;
+}
+
+message ScoredChunk {
+  financial.ai.platform.common.v1.Chunk chunk = 1;
+  float score = 2;
+}
+
+message SearchResponse {
+  repeated ScoredChunk results = 1;
+  float search_latency_ms = 2;
+}
