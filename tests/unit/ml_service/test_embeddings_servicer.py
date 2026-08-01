@@ -7,11 +7,10 @@ runs it and fast on every run after.
 
 from __future__ import annotations
 
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 import grpc
 import pytest
-
 from app.config import Settings
 from app.server import build_server
 from common.v1 import common_pb2
@@ -95,8 +94,12 @@ async def test_identical_content_across_two_documents_is_deduped(server_port: in
 
 
 async def test_delete_document_embeddings_removes_only_that_document(server_port: int):
-    await _chunk_and_embed(server_port, "doc-to-delete", "Some content to be deleted later.")
-    await _chunk_and_embed(server_port, "doc-to-keep", "Different content that should remain.")
+    await _chunk_and_embed(
+        server_port, "doc-to-delete", "Some content to be deleted later."
+    )
+    await _chunk_and_embed(
+        server_port, "doc-to-keep", "Different content that should remain."
+    )
 
     async with grpc.aio.insecure_channel(f"127.0.0.1:{server_port}") as channel:
         stub = embeddings_pb2_grpc.EmbeddingServiceStub(channel)

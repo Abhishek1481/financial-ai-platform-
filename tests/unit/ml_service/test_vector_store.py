@@ -4,13 +4,14 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-
 from app.embeddings.vector_store import ChunkRecord, FaissVectorStore
 
 DIM = 4
 
 
-def make_record(chunk_id: str, document_id: str = "doc-1", content_hash: str | None = None) -> ChunkRecord:
+def make_record(
+    chunk_id: str, document_id: str = "doc-1", content_hash: str | None = None
+) -> ChunkRecord:
     return ChunkRecord(
         chunk_id=chunk_id,
         document_id=document_id,
@@ -30,7 +31,13 @@ class TestFaissVectorStore_UpsertAndSearch:
         store = FaissVectorStore(dimension=DIM)
         store.upsert(
             [make_record("a"), make_record("b"), make_record("c")],
-            np.stack([unit_vector(1, 0, 0, 0), unit_vector(0, 1, 0, 0), unit_vector(0, 0, 1, 0)]),
+            np.stack(
+                [
+                    unit_vector(1, 0, 0, 0),
+                    unit_vector(0, 1, 0, 0),
+                    unit_vector(0, 0, 1, 0),
+                ]
+            ),
         )
 
         results = store.search(unit_vector(1, 0, 0, 0), top_k=3)
@@ -53,7 +60,10 @@ class TestFaissVectorStore_UpsertAndSearch:
     def test_upsert_rejects_mismatched_lengths(self):
         store = FaissVectorStore(dimension=DIM)
         with pytest.raises(ValueError):
-            store.upsert([make_record("a"), make_record("b")], np.stack([unit_vector(1, 0, 0, 0)]))
+            store.upsert(
+                [make_record("a"), make_record("b")],
+                np.stack([unit_vector(1, 0, 0, 0)]),
+            )
 
     def test_reupserting_same_chunk_id_replaces_not_duplicates(self):
         store = FaissVectorStore(dimension=DIM)
@@ -70,7 +80,10 @@ class TestFaissVectorStore_DeleteByDocument:
     def test_deletes_only_matching_document(self):
         store = FaissVectorStore(dimension=DIM)
         store.upsert(
-            [make_record("a", document_id="doc-1"), make_record("b", document_id="doc-2")],
+            [
+                make_record("a", document_id="doc-1"),
+                make_record("b", document_id="doc-2"),
+            ],
             np.stack([unit_vector(1, 0, 0, 0), unit_vector(0, 1, 0, 0)]),
         )
 
@@ -89,7 +102,8 @@ class TestFaissVectorStore_ContentHashDedup:
     def test_get_by_content_hash_finds_existing_chunk(self):
         store = FaissVectorStore(dimension=DIM)
         store.upsert(
-            [make_record("a", content_hash="shared-hash")], np.stack([unit_vector(1, 0, 0, 0)])
+            [make_record("a", content_hash="shared-hash")],
+            np.stack([unit_vector(1, 0, 0, 0)]),
         )
 
         found = store.get_by_content_hash("shared-hash")
@@ -122,7 +136,8 @@ class TestFaissVectorStore_Persistence:
 
         store = FaissVectorStore(dimension=DIM, persist_dir=persist_dir)
         store.upsert(
-            [make_record("a", content_hash="hash-a")], np.stack([unit_vector(1, 0, 0, 0)])
+            [make_record("a", content_hash="hash-a")],
+            np.stack([unit_vector(1, 0, 0, 0)]),
         )
 
         reloaded = FaissVectorStore(dimension=DIM, persist_dir=persist_dir)
@@ -133,7 +148,9 @@ class TestFaissVectorStore_Persistence:
         assert reloaded.get_by_content_hash("hash-a") is not None
 
     def test_fresh_persist_dir_starts_empty(self, tmp_path: Path):
-        store = FaissVectorStore(dimension=DIM, persist_dir=str(tmp_path / "does-not-exist-yet"))
+        store = FaissVectorStore(
+            dimension=DIM, persist_dir=str(tmp_path / "does-not-exist-yet")
+        )
         assert store.search(unit_vector(1, 0, 0, 0), top_k=10) == []
 
     def test_deletes_persist_across_reload(self, tmp_path: Path):
@@ -141,7 +158,10 @@ class TestFaissVectorStore_Persistence:
 
         store = FaissVectorStore(dimension=DIM, persist_dir=persist_dir)
         store.upsert(
-            [make_record("a", document_id="doc-1"), make_record("b", document_id="doc-2")],
+            [
+                make_record("a", document_id="doc-1"),
+                make_record("b", document_id="doc-2"),
+            ],
             np.stack([unit_vector(1, 0, 0, 0), unit_vector(0, 1, 0, 0)]),
         )
         store.delete_by_document("doc-1")

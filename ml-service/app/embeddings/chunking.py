@@ -45,9 +45,7 @@ class Chunker:
         if chunk_size_chars <= 0:
             raise ValueError("chunk_size_chars must be positive")
         if overlap_chars < 0 or overlap_chars >= chunk_size_chars:
-            raise ValueError(
-                "overlap_chars must be non-negative and smaller than chunk_size_chars"
-            )
+            raise ValueError("overlap_chars must be non-negative and smaller than chunk_size_chars")
         self._chunk_size = chunk_size_chars
         self._overlap = overlap_chars
 

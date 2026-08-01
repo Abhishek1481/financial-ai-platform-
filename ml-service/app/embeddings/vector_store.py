@@ -48,6 +48,7 @@ class VectorStore(Protocol):
         appearing in a different document) instead of recomputing the
         embedding for content the model has already seen."""
         ...
+
     def get_by_chunk_id(self, chunk_id: str) -> ChunkRecord | None: ...
     def all_records(self) -> list[ChunkRecord]:
         """Every stored record — used to rebuild KeywordIndex (BM25 has no

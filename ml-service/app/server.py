@@ -23,6 +23,7 @@ from app.config import Settings, get_settings
 from app.embeddings.model import EmbeddingModel
 from app.embeddings.vector_store import FaissVectorStore
 from app.logging import configure_logging, get_logger
+from app.rag.llm_client import build_llm_client
 from app.search.keyword_index import KeywordIndex
 from app.servicers.embeddings import EmbeddingServicer
 from app.servicers.evaluation import EvaluationServicer
@@ -62,6 +63,12 @@ def _build_services(settings: Settings) -> tuple[_ServiceRegistration, ...]:
     for record in vector_store.all_records():
         keyword_index.upsert(record.chunk_id, record.document_id, record.text)
 
+    # "fake" (the default) needs no API key and is what runs in this dev
+    # environment; switching ML_SERVICE_LLM_PROVIDER to "openai"/"anthropic"
+    # plus supplying ML_SERVICE_LLM_API_KEY activates the real LangChain
+    # path with no code change (see app/rag/llm_client.py).
+    llm_client = build_llm_client(settings)
+
     return (
         (
             ingestion_pb2.DESCRIPTOR.services_by_name["IngestionService"].full_name,
@@ -81,7 +88,14 @@ def _build_services(settings: Settings) -> tuple[_ServiceRegistration, ...]:
         (
             rag_pb2.DESCRIPTOR.services_by_name["RAGService"].full_name,
             rag_pb2_grpc.add_RAGServiceServicer_to_server,
-            RAGServicer(),
+            RAGServicer(
+                embedding_model,
+                vector_store,
+                keyword_index,
+                llm_client,
+                settings.llm_temperature,
+                settings.llm_max_tokens,
+            ),
         ),
         (
             evaluation_pb2.DESCRIPTOR.services_by_name["EvaluationService"].full_name,
@@ -124,7 +138,9 @@ async def build_server(settings: Settings) -> tuple[grpc.aio.Server, int]:
     return server, bound_port
 
 
-def _install_signal_handlers(loop: asyncio.AbstractEventLoop, on_signal: Callable[[], None]) -> None:
+def _install_signal_handlers(
+    loop: asyncio.AbstractEventLoop, on_signal: Callable[[], None]
+) -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
             loop.add_signal_handler(sig, on_signal)

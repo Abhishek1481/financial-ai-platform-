@@ -23,7 +23,7 @@ it's clear what's real vs. planned at any point in time.
       updates.
 - [x] **Phase 8 — Semantic + hybrid search.** Cosine similarity, metadata
       filtering, top-k retrieval, hybrid (BM25 + vector).
-- [ ] **Phase 9 — RAG + citations.** Retrieval, prompt construction, LLM
+- [x] **Phase 9 — RAG + citations.** Retrieval, prompt construction, LLM
       call, citation extraction, streaming responses.
 - [ ] **Phase 10 — Financial summarization.** Executive/risk/revenue/
       sentiment summaries.

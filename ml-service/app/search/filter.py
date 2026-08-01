@@ -24,7 +24,9 @@ from app.embeddings.vector_store import ChunkRecord
 from common.v1 import common_pb2
 
 
-def build_filter(metadata_filter: common_pb2.MetadataFilter | None) -> Callable[[ChunkRecord], bool]:
+def build_filter(
+    metadata_filter: common_pb2.MetadataFilter | None,
+) -> Callable[[ChunkRecord], bool]:
     if metadata_filter is None:
         return lambda _chunk: True
 

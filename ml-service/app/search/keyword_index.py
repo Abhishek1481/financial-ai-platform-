@@ -98,7 +98,9 @@ class KeywordIndex:
         if not self._dirty:
             return
         self._chunk_ids = list(self._texts.keys())
-        self._tokenized_by_chunk = {cid: set(_tokenize(self._texts[cid])) for cid in self._chunk_ids}
+        self._tokenized_by_chunk = {
+            cid: set(_tokenize(self._texts[cid])) for cid in self._chunk_ids
+        }
         if self._chunk_ids:
             tokenized_corpus = [_tokenize(self._texts[cid]) for cid in self._chunk_ids]
             self._bm25 = BM25Plus(tokenized_corpus)

@@ -6,7 +6,11 @@ from app.search.fusion import reciprocal_rank_fusion
 
 def make_hit(chunk_id: str, score: float) -> ScoredChunk:
     record = ChunkRecord(
-        chunk_id=chunk_id, document_id="doc-1", text=f"text {chunk_id}", chunk_index=0, content_hash=chunk_id
+        chunk_id=chunk_id,
+        document_id="doc-1",
+        text=f"text {chunk_id}",
+        chunk_index=0,
+        content_hash=chunk_id,
     )
     return ScoredChunk(chunk=record, score=score)
 

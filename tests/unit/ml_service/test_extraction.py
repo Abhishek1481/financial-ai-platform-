@@ -1,5 +1,5 @@
 """Unit tests for app/extraction/*. Run with the ml-service venv active:
-    cd ml-service && .venv/Scripts/python.exe -m pytest ../tests/unit/ml_service -v
+cd ml-service && .venv/Scripts/python.exe -m pytest ../tests/unit/ml_service -v
 """
 
 from __future__ import annotations
@@ -12,20 +12,21 @@ import docx
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent))
-from pdf_fixture import make_pdf_bytes  # noqa: E402
+from app import _bootstrap  # noqa: F401  (must run before generated-stub imports)
+from app.extraction.base import ExtractionError
+from app.extraction.docx import DocxExtractor
+from app.extraction.factory import get_extractor
+from app.extraction.html import HtmlExtractor
+from app.extraction.pdf import PdfExtractor
+from app.extraction.sec_metadata import infer_sec_metadata
+from app.extraction.txt import TxtExtractor
+from common.v1 import common_pb2
+from pdf_fixture import make_pdf_bytes
 
-from app import _bootstrap  # noqa: E402,F401  (must run before generated-stub imports)
-from app.extraction.base import ExtractionError  # noqa: E402
-from app.extraction.docx import DocxExtractor  # noqa: E402
-from app.extraction.factory import get_extractor  # noqa: E402
-from app.extraction.html import HtmlExtractor  # noqa: E402
-from app.extraction.pdf import PdfExtractor  # noqa: E402
-from app.extraction.sec_metadata import infer_sec_metadata  # noqa: E402
-from app.extraction.txt import TxtExtractor  # noqa: E402
-from common.v1 import common_pb2  # noqa: E402
 
-
-def make_docx_bytes(paragraphs: list[str], table_rows: list[list[str]] | None = None) -> bytes:
+def make_docx_bytes(
+    paragraphs: list[str], table_rows: list[list[str]] | None = None
+) -> bytes:
     document = docx.Document()
     for p in paragraphs:
         document.add_paragraph(p)
@@ -41,7 +42,7 @@ def make_docx_bytes(paragraphs: list[str], table_rows: list[list[str]] | None = 
 
 class TestTxtExtractor:
     def test_extracts_utf8_text(self):
-        result = TxtExtractor().extract("Tesla Q1 revenue: $21.3B".encode("utf-8"))
+        result = TxtExtractor().extract(b"Tesla Q1 revenue: $21.3B")
         assert result.raw_text == "Tesla Q1 revenue: $21.3B"
         assert result.page_count == 1
         assert result.tables == []
@@ -67,8 +68,10 @@ class TestHtmlExtractor:
         assert "<b>" not in result.raw_text
 
     def test_strips_script_and_style(self):
-        html = b"<html><head><style>.x{color:red}</style></head><body>" \
-               b"<script>alert('x')</script><p>Real content</p></body></html>"
+        html = (
+            b"<html><head><style>.x{color:red}</style></head><body>"
+            b"<script>alert('x')</script><p>Real content</p></body></html>"
+        )
         result = HtmlExtractor().extract(html)
         assert "alert" not in result.raw_text
         assert "color:red" not in result.raw_text
@@ -158,7 +161,9 @@ class TestFactory:
 
 class TestSecMetadata:
     def test_detects_10k(self):
-        text = "UNITED STATES SECURITIES AND EXCHANGE COMMISSION\nFORM 10-K\nAnnual Report"
+        text = (
+            "UNITED STATES SECURITIES AND EXCHANGE COMMISSION\nFORM 10-K\nAnnual Report"
+        )
         metadata = infer_sec_metadata(text)
         assert metadata.filing_type == "10-K"
 

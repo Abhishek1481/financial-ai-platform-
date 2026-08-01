@@ -49,6 +49,22 @@ class Settings(BaseSettings):
     # (used by tests).
     vector_store_dir: str = "./data/vector-store"
 
+    # LLMClient (app/rag/llm_client.py) is provider-switchable: "openai" ->
+    # ChatOpenAI, "anthropic" -> ChatAnthropic, "fake" -> FakeLLMClient
+    # (deterministic, no network call — used when no API key is available,
+    # e.g. this dev environment; see app/rag/llm_client.py's module
+    # docstring). llm_api_key is read from this service's own env var
+    # rather than deferring to OPENAI_API_KEY/ANTHROPIC_API_KEY directly,
+    # so ml-service's config surface is self-contained and doesn't depend
+    # on which SDK happens to read which ambient env var.
+    llm_provider: str = "fake"
+    llm_model_name: str = "gpt-4o-mini"
+    llm_api_key: str = ""
+    llm_temperature: float = 0.1
+    # Ceiling on generated tokens per answer — bounds latency/cost and
+    # gives the fake client a concrete number to honor in tests.
+    llm_max_tokens: int = 1024
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

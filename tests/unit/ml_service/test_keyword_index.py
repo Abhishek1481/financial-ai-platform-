@@ -10,7 +10,9 @@ class TestKeywordIndex:
 
     def test_finds_matching_document_by_term_overlap(self):
         index = KeywordIndex()
-        index.upsert("chunk-1", "doc-1", "Tesla revenue grew significantly this quarter")
+        index.upsert(
+            "chunk-1", "doc-1", "Tesla revenue grew significantly this quarter"
+        )
         index.upsert("chunk-2", "doc-2", "Apple iPhone sales declined")
 
         results = index.search("tesla revenue", top_k=5)

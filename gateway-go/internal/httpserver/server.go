@@ -19,6 +19,7 @@ import (
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/ingestion"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/metrics"
 	appmiddleware "github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/middleware"
+	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/rag"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/search"
 )
 
@@ -33,6 +34,7 @@ type Dependencies struct {
 	Tokens      *auth.TokenService
 	Ingestion   *ingestion.Service
 	Searcher    search.Searcher
+	Answerer    rag.Answerer
 }
 
 // Server owns the public API listener and the internal metrics listener.

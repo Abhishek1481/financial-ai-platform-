@@ -7,7 +7,7 @@ summarization, and model evaluation. It has **no public HTTP port** —
 [`/proto`](../proto) for the contracts and [`/docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md)
 for why the boundary is drawn this way).
 
-## Status (Phase 8)
+## Status (Phase 9)
 
 Phase 3 built the skeleton: every RPC from every service in `/proto` is
 registered and reachable, the standard gRPC health-checking and reflection
@@ -60,6 +60,36 @@ uploaded three documents on different topics, confirmed semantic search
 ranks a topically-related-but-keyword-dissimilar query correctly,
 keyword search finds only the exact term match, hybrid search blends
 both, and ticker filtering excludes non-matching documents.
+
+Phase 9 fills in `RAGService.Query`: retrieval (the same hybrid
+vector+keyword pipeline as `SearchService.Search`, extracted into
+`app/search/retrieval.py` so neither servicer duplicates it) feeds a
+numbered-context prompt (`app/rag/prompt.py`) to an `LLMClient`
+(`app/rag/llm_client.py`), whose streamed tokens are relayed to the gRPC
+response stream as they're generated and whose `[N]` citation markers are
+resolved back to real chunk IDs (`app/rag/citations.py`) once generation
+finishes.
+
+- `LLMClient` is a `Protocol` (same Strategy pattern as `VectorStore`,
+  `ingestion.Extractor`, `search.Searcher`): `FakeLLMClient` needs no API
+  key and is what actually runs in this environment (no
+  OpenAI/Anthropic key configured — `ML_SERVICE_LLM_PROVIDER` defaults to
+  `fake`), while `LangChainLLMClient` wraps `ChatOpenAI`/`ChatAnthropic`
+  via LangChain's async `.astream()` and is fully wired but unverified
+  against a live provider — dropping an API key into
+  `ML_SERVICE_LLM_API_KEY` and switching the provider setting activates it
+  with no code change.
+- `FakeLLMClient` isn't a no-op: it parses the numbered context chunks
+  back out of the prompt and synthesizes an answer that actually cites
+  them (`[1]`, `[2]`, ...), so retrieval, prompt construction, streaming,
+  and citation extraction are all genuinely exercised end-to-end — only
+  the model call itself is stubbed.
+
+Verified end-to-end against a live `gateway-go` + `ml-service` pair:
+uploaded a real document, embedded it, then streamed a real question
+through `POST /api/v1/rag/query` and watched SSE `token` events arrive
+live, followed by a `final` event whose citation resolved back to the
+uploaded document's actual chunk ID — not a canned response.
 
 ## Setup
 

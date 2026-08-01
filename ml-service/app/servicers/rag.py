@@ -1,27 +1,92 @@
-"""RAGService — real implementation lands across Phase 9 (RAG + citations +
-streaming) and Phase 10 (financial summarization)."""
+"""RAGService.Query: retrieval -> prompt construction -> streamed LLM call ->
+citation extraction. RAGService.Summarize lands in Phase 10.
+
+Retrieval always runs hybrid (vector + keyword, fused) — unlike
+SearchService.Search, callers here have no reason to pick a narrower mode;
+RAG wants the best available context, not a mode toggle.
+"""
 
 from __future__ import annotations
 
+import time
 from collections.abc import AsyncIterator
 
 import grpc
 
 from app import _bootstrap  # noqa: F401  (must run before generated-stub imports)
+from app.embeddings.model import EmbeddingModel
+from app.embeddings.vector_store import VectorStore
+from app.rag.citations import build_citations
+from app.rag.llm_client import LLMClient, LLMFinal, LLMToken, LLMUsage
+from app.rag.prompt import build_messages
+from app.search.keyword_index import KeywordIndex
+from app.search.retrieval import DEFAULT_TOP_K, retrieve
+from common.v1 import common_pb2
 from rag.v1 import rag_pb2, rag_pb2_grpc
+from search.v1 import search_pb2
 
 
 class RAGServicer(rag_pb2_grpc.RAGServiceServicer):
+    def __init__(
+        self,
+        model: EmbeddingModel,
+        store: VectorStore,
+        keyword_index: KeywordIndex,
+        llm_client: LLMClient,
+        temperature: float,
+        max_tokens: int,
+    ) -> None:
+        self._model = model
+        self._store = store
+        self._keyword_index = keyword_index
+        self._llm_client = llm_client
+        self._temperature = temperature
+        self._max_tokens = max_tokens
+
     async def Query(
         self,
         request: rag_pb2.QueryRequest,
         context: grpc.aio.ServicerContext,
     ) -> AsyncIterator[rag_pb2.QueryResponseChunk]:
-        await context.abort(
-            grpc.StatusCode.UNIMPLEMENTED,
-            "RAGService.Query is not implemented yet (Phase 9: RAG + citations + streaming).",
+        start = time.monotonic()
+
+        hits = await retrieve(
+            model=self._model,
+            store=self._store,
+            keyword_index=self._keyword_index,
+            query=request.question,
+            top_k=request.top_k or DEFAULT_TOP_K,
+            mode=search_pb2.SEARCH_MODE_HYBRID,
+            metadata_filter=request.filter if request.HasField("filter") else None,
         )
-        yield  # pragma: no cover — see EmbeddingServicer.ChunkAndEmbed for why this is here
+        context_chunks = [hit.chunk for hit in hits]
+        messages = build_messages(request.question, list(request.history), context_chunks)
+
+        generated_parts: list[str] = []
+        usage = LLMUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+        async for event in self._llm_client.stream(
+            messages, temperature=self._temperature, max_tokens=self._max_tokens
+        ):
+            if isinstance(event, LLMToken):
+                generated_parts.append(event.text)
+                yield rag_pb2.QueryResponseChunk(token=event.text)
+            elif isinstance(event, LLMFinal):
+                usage = event.usage
+
+        citations = build_citations("".join(generated_parts), context_chunks)
+        latency_ms = (time.monotonic() - start) * 1000
+
+        yield rag_pb2.QueryResponseChunk(
+            final=rag_pb2.QueryFinal(
+                citations=citations,
+                usage=common_pb2.TokenUsage(
+                    prompt_tokens=usage.prompt_tokens,
+                    completion_tokens=usage.completion_tokens,
+                    total_tokens=usage.total_tokens,
+                ),
+                latency_ms=latency_ms,
+            )
+        )
 
     async def Summarize(
         self,

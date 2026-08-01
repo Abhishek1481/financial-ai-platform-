@@ -15,12 +15,15 @@ import (
 	commonv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/common/v1"
 	embeddingsv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/embeddings/v1"
 	ingestionv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/ingestion/v1"
+	ragv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/rag/v1"
 	searchv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/search/v1"
 
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/auth"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/config"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/health"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/ingestion"
+	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/mlclient"
+	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/rag"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/search"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/storage"
 )
@@ -96,6 +99,37 @@ func (f *fakeSearcher) Search(
 	}, nil
 }
 
+// fakeAnswerer is fakeSearcher's counterpart for rag.Answerer: emits two
+// fake tokens then a final message over the same channel shape mlclient.Query
+// produces, so handlers.RAGHandlers is exercised without a live ml-service.
+type fakeAnswerer struct {
+	respFn func(req *ragv1.QueryRequest) []mlclient.QueryEvent
+}
+
+func (f *fakeAnswerer) Query(
+	ctx context.Context, req *ragv1.QueryRequest,
+) (<-chan mlclient.QueryEvent, error) {
+	events := []mlclient.QueryEvent{
+		{Token: "fake "},
+		{Token: "answer"},
+		{Final: &ragv1.QueryFinal{
+			Citations: []*commonv1.Citation{{ChunkId: "fake-chunk-1", DocumentId: "fake-doc-1"}},
+			Usage:     &commonv1.TokenUsage{PromptTokens: 5, CompletionTokens: 2, TotalTokens: 7},
+			LatencyMs: 1,
+		}},
+	}
+	if f.respFn != nil {
+		events = f.respFn(req)
+	}
+
+	ch := make(chan mlclient.QueryEvent, len(events))
+	for _, e := range events {
+		ch <- e
+	}
+	close(ch)
+	return ch, nil
+}
+
 // startTestServer binds both listeners on ephemeral (":0") ports, starts
 // serving in the background, and registers cleanup to shut the server down
 // — mirrors the build/start split ml-service's Python test suite uses for
@@ -109,11 +143,15 @@ func startTestServer(t *testing.T) *Server {
 
 func startTestServerWithExtractor(t *testing.T, extractor ingestion.Extractor) *Server {
 	t.Helper()
-	return startTestServerWithMLDeps(t, extractor, &fakeEmbedder{}, &fakeSearcher{})
+	return startTestServerWithMLDeps(t, extractor, &fakeEmbedder{}, &fakeSearcher{}, &fakeAnswerer{})
 }
 
 func startTestServerWithMLDeps(
-	t *testing.T, extractor ingestion.Extractor, embedder ingestion.Embedder, searcher search.Searcher,
+	t *testing.T,
+	extractor ingestion.Extractor,
+	embedder ingestion.Embedder,
+	searcher search.Searcher,
+	answerer rag.Answerer,
 ) *Server {
 	t.Helper()
 
@@ -159,6 +197,7 @@ func startTestServerWithMLDeps(
 		Tokens:      tokens,
 		Ingestion:   ingestionService,
 		Searcher:    searcher,
+		Answerer:    answerer,
 	})
 	if err := server.Listen(); err != nil {
 		t.Fatalf("Listen() failed: %v", err)
@@ -318,6 +357,27 @@ func postJSON(t *testing.T, url string, body any) *http.Response {
 		t.Fatalf("marshal request body: %v", err)
 	}
 	resp, err := http.Post(url, "application/json", strings.NewReader(string(raw)))
+	if err != nil {
+		t.Fatalf("POST %s failed: %v", url, err)
+	}
+	return resp
+}
+
+func postJSONWithToken(t *testing.T, url, token string, body any) *http.Response {
+	t.Helper()
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal request body: %v", err)
+	}
+	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(string(raw)))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("POST %s failed: %v", url, err)
 	}
@@ -738,7 +798,7 @@ func TestSearch_ReturnsResultsFromSearcher(t *testing.T) {
 			}, nil
 		},
 	}
-	server := startTestServerWithMLDeps(t, &fakeExtractor{}, &fakeEmbedder{}, searcher)
+	server := startTestServerWithMLDeps(t, &fakeExtractor{}, &fakeEmbedder{}, searcher, &fakeAnswerer{})
 	baseURL := "http://" + server.HTTPAddr()
 
 	registerResp := postJSON(t, baseURL+"/api/v1/auth/register", map[string]string{
@@ -775,5 +835,116 @@ func TestSearch_ReturnsResultsFromSearcher(t *testing.T) {
 	}
 	if body.Results[0].DocumentID != "doc-1" || body.Results[0].Metadata.Ticker != "TSLA" {
 		t.Errorf("unexpected result: %+v", body.Results[0])
+	}
+}
+
+func TestRAGQuery_RequiresAuth(t *testing.T) {
+	server := startTestServer(t)
+
+	resp := postJSONWithToken(t, "http://"+server.HTTPAddr()+"/api/v1/rag/query", "", map[string]string{
+		"question": "What are Tesla's Q1 risks?",
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
+	}
+}
+
+func TestRAGQuery_MissingQuestionIsRejected(t *testing.T) {
+	server := startTestServer(t)
+	baseURL := "http://" + server.HTTPAddr()
+
+	registerResp := postJSON(t, baseURL+"/api/v1/auth/register", map[string]string{
+		"email":    "rag1@test.local",
+		"password": "correct-horse-battery",
+	})
+	registerResp.Body.Close()
+	token := login(t, baseURL, "rag1@test.local", "correct-horse-battery")
+
+	resp := postJSONWithToken(t, baseURL+"/api/v1/rag/query", token, map[string]string{})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusBadRequest)
+	}
+}
+
+func TestRAGQuery_InvalidHistoryRoleIsRejected(t *testing.T) {
+	server := startTestServer(t)
+	baseURL := "http://" + server.HTTPAddr()
+
+	registerResp := postJSON(t, baseURL+"/api/v1/auth/register", map[string]string{
+		"email":    "rag2@test.local",
+		"password": "correct-horse-battery",
+	})
+	registerResp.Body.Close()
+	token := login(t, baseURL, "rag2@test.local", "correct-horse-battery")
+
+	resp := postJSONWithToken(t, baseURL+"/api/v1/rag/query", token, map[string]any{
+		"question": "What happened?",
+		"history":  []map[string]string{{"role": "narrator", "content": "..."}},
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusBadRequest)
+	}
+}
+
+func TestRAGQuery_StreamsTokensThenAFinalEventWithCitations(t *testing.T) {
+	answerer := &fakeAnswerer{
+		respFn: func(req *ragv1.QueryRequest) []mlclient.QueryEvent {
+			if req.GetQuestion() != "How did Tesla's revenue perform?" {
+				t.Errorf("question = %q, want %q", req.GetQuestion(), "How did Tesla's revenue perform?")
+			}
+			return []mlclient.QueryEvent{
+				{Token: "Revenue "},
+				{Token: "grew "},
+				{Token: "[1]."},
+				{Final: &ragv1.QueryFinal{
+					Citations: []*commonv1.Citation{
+						{ChunkId: "chunk-1", DocumentId: "doc-tesla", Quote: "Tesla revenue grew significantly."},
+					},
+					Usage:     &commonv1.TokenUsage{PromptTokens: 42, CompletionTokens: 3, TotalTokens: 45},
+					LatencyMs: 7.5,
+				}},
+			}
+		},
+	}
+	server := startTestServerWithMLDeps(t, &fakeExtractor{}, &fakeEmbedder{}, &fakeSearcher{}, answerer)
+	baseURL := "http://" + server.HTTPAddr()
+
+	registerResp := postJSON(t, baseURL+"/api/v1/auth/register", map[string]string{
+		"email":    "rag3@test.local",
+		"password": "correct-horse-battery",
+	})
+	registerResp.Body.Close()
+	token := login(t, baseURL, "rag3@test.local", "correct-horse-battery")
+
+	resp := postJSONWithToken(t, baseURL+"/api/v1/rag/query", token, map[string]string{
+		"question": "How did Tesla's revenue perform?",
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
+		t.Errorf("Content-Type = %q, want text/event-stream", ct)
+	}
+
+	rawBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	body := string(rawBody)
+
+	for _, want := range []string{"event:token", `"token":"Revenue "`, `"token":"[1]."`, "event:final"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("SSE body missing %q, got:\n%s", want, body)
+		}
+	}
+	if !strings.Contains(body, `"document_id":"doc-tesla"`) {
+		t.Errorf("SSE final event missing citation document_id, got:\n%s", body)
+	}
+	if !strings.Contains(body, `"total_tokens":45`) {
+		t.Errorf("SSE final event missing usage, got:\n%s", body)
 	}
 }

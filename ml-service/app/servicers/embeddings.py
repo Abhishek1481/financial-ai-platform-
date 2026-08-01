@@ -30,7 +30,9 @@ logger = get_logger(__name__)
 
 
 class EmbeddingServicer(embeddings_pb2_grpc.EmbeddingServiceServicer):
-    def __init__(self, model: EmbeddingModel, store: VectorStore, keyword_index: KeywordIndex) -> None:
+    def __init__(
+        self, model: EmbeddingModel, store: VectorStore, keyword_index: KeywordIndex
+    ) -> None:
         self._model = model
         self._store = store
         self._keyword_index = keyword_index
@@ -188,6 +190,8 @@ class EmbeddingServicer(embeddings_pb2_grpc.EmbeddingServiceServicer):
         )
 
 
-def _stack_vectors(vectors_by_index: dict[int, np.ndarray], count: int, dimension: int) -> np.ndarray:
+def _stack_vectors(
+    vectors_by_index: dict[int, np.ndarray], count: int, dimension: int
+) -> np.ndarray:
     stacked = np.stack([vectors_by_index[i] for i in range(count)])
     return stacked.astype(np.float32).reshape(count, dimension)

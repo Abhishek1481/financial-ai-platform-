@@ -18,6 +18,7 @@ import (
 	commonv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/common/v1"
 	embeddingsv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/embeddings/v1"
 	ingestionv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/ingestion/v1"
+	ragv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/rag/v1"
 	searchv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/search/v1"
 )
 
@@ -30,6 +31,7 @@ type Client struct {
 	ingestion  ingestionv1.IngestionServiceClient
 	embeddings embeddingsv1.EmbeddingServiceClient
 	search     searchv1.SearchServiceClient
+	rag        ragv1.RAGServiceClient
 	health     grpc_health_v1.HealthClient
 }
 
@@ -53,6 +55,7 @@ func NewClient(addr string) (*Client, error) {
 		ingestion:  ingestionv1.NewIngestionServiceClient(conn),
 		embeddings: embeddingsv1.NewEmbeddingServiceClient(conn),
 		search:     searchv1.NewSearchServiceClient(conn),
+		rag:        ragv1.NewRAGServiceClient(conn),
 		health:     grpc_health_v1.NewHealthClient(conn),
 	}, nil
 }
@@ -157,4 +160,49 @@ func (c *Client) Search(
 		return nil, fmt.Errorf("mlclient: Search: %w", err)
 	}
 	return resp, nil
+}
+
+// QueryEvent is one item off the channel Query returns: either a generated
+// token, the final message (citations/usage/latency), or a terminal error —
+// never more than one of the three on a given event.
+type QueryEvent struct {
+	Token string
+	Final *ragv1.QueryFinal
+	Err   error
+}
+
+// Query asks ml-service to answer a question over retrieved context,
+// streaming generated tokens live rather than draining the whole answer
+// like ChunkAndEmbed does — this is the reason the Go<->Python boundary
+// supports streaming at all (see proto/README.md). The returned channel is
+// closed once the final message has been sent or an error occurs; the
+// receiving goroutine (internal/handlers/rag.go, forwarding over SSE) reads
+// until it closes rather than this method blocking on the whole stream.
+func (c *Client) Query(ctx context.Context, req *ragv1.QueryRequest) (<-chan QueryEvent, error) {
+	stream, err := c.rag.Query(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("mlclient: Query: %w", err)
+	}
+
+	ch := make(chan QueryEvent)
+	go func() {
+		defer close(ch)
+		for {
+			chunk, err := stream.Recv()
+			if errors.Is(err, io.EOF) {
+				return
+			}
+			if err != nil {
+				ch <- QueryEvent{Err: fmt.Errorf("mlclient: Query stream: %w", err)}
+				return
+			}
+			switch payload := chunk.GetPayload().(type) {
+			case *ragv1.QueryResponseChunk_Token:
+				ch <- QueryEvent{Token: payload.Token}
+			case *ragv1.QueryResponseChunk_Final:
+				ch <- QueryEvent{Final: payload.Final}
+			}
+		}
+	}()
+	return ch, nil
 }

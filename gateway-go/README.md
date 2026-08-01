@@ -6,7 +6,7 @@ streaming, caching (later phases) — never ML/NLP itself, which is
 `ml-service`'s job exclusively (see [`/docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md)
 for why the boundary is drawn this way).
 
-## Status (Phase 8)
+## Status (Phase 9)
 
 Phase 4 built the skeleton (HTTP lifecycle, logging, health/metrics).
 Phase 5 added JWT auth and RBAC. Phase 6 added document ingestion: upload,
@@ -17,7 +17,13 @@ the same job: once extraction succeeds, the worker calls
 plus `chunk_count`/`chunks_skipped_duplicate` fields. Phase 8 adds
 `GET /api/v1/search`, a thin query-parsing layer over
 `SearchService.Search` (`internal/search.Searcher` — same fake-for-tests
-interface pattern as `Extractor`/`Embedder`).
+interface pattern as `Extractor`/`Embedder`). Phase 9 adds
+`POST /api/v1/rag/query`, a Server-Sent Events endpoint over
+`RAGService.Query` (`internal/rag.Answerer`, same pattern again):
+`mlclient.Client.Query` wraps the gRPC server-streaming call in a Go
+channel (`<-chan mlclient.QueryEvent`) so `RAGHandlers.Query` can relay
+generated tokens to the HTTP client live via Gin's `c.Stream()`, rather
+than draining the whole answer first the way `ChunkAndEmbed` does.
 
 ```
 POST /api/v1/auth/register   {email, password} -> 201 {id, email, role}   (always role "user")
@@ -33,6 +39,11 @@ GET  /api/v1/documents/:id    Bearer token -> 200 {..., job: {status, extracted_
 GET  /api/v1/search           Bearer token, ?q=...&mode=semantic|keyword|hybrid&top_k=10
                                &tickers=AAPL,TSLA&filing_types=10-K&fiscal_period=FY2025-Q1
                                -> 200 {results: [{chunk_id, document_id, text, score, metadata}], search_latency_ms}
+
+POST /api/v1/rag/query        Bearer token, body: {question, session_id?, history?, top_k?,
+                               tickers?, filing_types?, fiscal_period?}
+                               -> 200 text/event-stream: "token" events {token}, then one "final"
+                               event {citations, usage, latency_ms}, or an "error" event
 ```
 
 User storage is in-memory (`internal/auth.MemoryUserRepository`); so are
@@ -95,10 +106,12 @@ gateway-go/
 │   ├── health/                 readiness-check registry (liveness lives in handlers)
 │   ├── auth/                   JWT issuance/validation, RBAC middleware, user repository + service
 │   ├── storage/                 ObjectStore: local filesystem today, S3/MinIO in Phase 16
-│   ├── mlclient/                 gRPC client to ml-service (IngestionService today)
+│   ├── mlclient/                 gRPC client to ml-service (Ingestion/Embedding/Search/RAG)
 │   ├── worker/                   generic bounded worker pool
 │   ├── ingestion/                 document/job domain: dedup, Upload, worker-pool wiring
-│   ├── handlers/                /healthz, /api/v1/auth/*, /api/v1/me, /api/v1/admin/*, /api/v1/documents*
+│   ├── search/                   Searcher interface over SearchService
+│   ├── rag/                       Answerer interface over RAGService (streaming)
+│   ├── handlers/                /healthz, /api/v1/auth/*, /api/v1/me, /api/v1/admin/*, /api/v1/documents*, /api/v1/search, /api/v1/rag/query
 │   ├── metrics/                 Prometheus middleware + /metrics handler
 │   ├── middleware/              structured request logging, panic recovery
 │   └── httpserver/              wires it all together; owns listener/server lifecycle + routes
@@ -106,6 +119,18 @@ gateway-go/
 ```
 
 ## Design decisions
+
+**`mlclient.Client.Query` returns a channel, not a drained result.**
+`ChunkAndEmbed` drains its server-streaming RPC fully and returns only the
+final message — fine there, since gateway-go's `Job` model only tracks
+coarse stages. RAG is different: the entire point of a streaming RPC here
+is that a user is watching tokens arrive, so `Query` instead spawns a
+goroutine that forwards each `stream.Recv()` onto a `<-chan QueryEvent`,
+closing it when the stream ends or errors. `RAGHandlers.Query`
+(`internal/handlers/rag.go`) reads that channel inside Gin's `c.Stream()`
+and re-emits each token as an SSE event immediately — no buffering the
+whole answer, which would defeat the reason the proto uses server-streaming
+at all (see `proto/README.md`'s "Why these RPC shapes").
 
 **Metrics on a separate port from public traffic.** `/metrics` is served by
 its own `http.Server` on `GATEWAY_METRICS_PORT` (default 9090), never on the

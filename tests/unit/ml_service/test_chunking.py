@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-
 from app.embeddings.chunking import Chunker
 
 
@@ -41,7 +40,9 @@ class TestChunker_Packing:
         # Each paragraph is well under the budget individually, but all of
         # them together exceed it, forcing a split across chunk
         # boundaries.
-        paragraphs = [f"Paragraph number {i} with some financial content here." for i in range(30)]
+        paragraphs = [
+            f"Paragraph number {i} with some financial content here." for i in range(30)
+        ]
         text = "\n\n".join(paragraphs)
         chunks = Chunker(chunk_size_chars=200, overlap_chars=20).chunk(text)
         assert len(chunks) > 1
@@ -57,7 +58,9 @@ class TestChunker_Packing:
         assert [c.index for c in chunks] == list(range(len(chunks)))
 
     def test_oversized_single_sentence_is_hard_split(self):
-        huge_sentence = "revenue " * 500  # no terminal punctuation, one giant "sentence"
+        huge_sentence = (
+            "revenue " * 500
+        )  # no terminal punctuation, one giant "sentence"
         chunks = Chunker(chunk_size_chars=300, overlap_chars=30).chunk(huge_sentence)
         assert len(chunks) > 1
         for c in chunks:
@@ -66,7 +69,10 @@ class TestChunker_Packing:
 
 class TestChunker_Overlap:
     def test_consecutive_chunks_share_trailing_context(self):
-        paragraphs = [f"This is paragraph number {i} about quarterly earnings results." for i in range(20)]
+        paragraphs = [
+            f"This is paragraph number {i} about quarterly earnings results."
+            for i in range(20)
+        ]
         text = "\n\n".join(paragraphs)
         chunks = Chunker(chunk_size_chars=200, overlap_chars=50).chunk(text)
         assert len(chunks) > 1

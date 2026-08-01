@@ -8,7 +8,12 @@ from common.v1 import common_pb2
 
 def make_chunk(**metadata: str) -> ChunkRecord:
     return ChunkRecord(
-        chunk_id="c1", document_id="doc-1", text="text", chunk_index=0, content_hash="h1", metadata=metadata
+        chunk_id="c1",
+        document_id="doc-1",
+        text="text",
+        chunk_index=0,
+        content_hash="h1",
+        metadata=metadata,
     )
 
 
@@ -35,7 +40,9 @@ class TestBuildFilter:
         assert matches(make_chunk(fiscal_period="FY2025-Q2")) is False
 
     def test_combined_filters_are_all_required(self):
-        matches = build_filter(common_pb2.MetadataFilter(tickers=["AAPL"], filing_types=["10-K"]))
+        matches = build_filter(
+            common_pb2.MetadataFilter(tickers=["AAPL"], filing_types=["10-K"])
+        )
         assert matches(make_chunk(ticker="AAPL", filing_type="10-K")) is True
         assert matches(make_chunk(ticker="AAPL", filing_type="10-Q")) is False
 
