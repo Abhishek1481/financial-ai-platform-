@@ -9,7 +9,7 @@ it's clear what's real vs. planned at any point in time.
 - [x] **Phase 2 — Protobuf contracts.** The gRPC interface between
       `gateway-go` and `ml-service`, defined before either service is built
       against it.
-- [ ] **Phase 3 — `ml-service` skeleton.** gRPC server, config, health
+- [x] **Phase 3 — `ml-service` skeleton.** gRPC server, config, health
       checks, project layout for `rag/`, `embeddings/`, `evaluation/`.
 - [ ] **Phase 4 — `gateway-go` skeleton.** Gin router, config, structured
       logging, graceful shutdown, `/healthz`, `/readyz`, `/metrics`.

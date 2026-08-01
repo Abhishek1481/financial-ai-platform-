@@ -1,8 +1,14 @@
 version: v2
+# NOTE: day-to-day codegen does NOT go through this file — see
+# proto/README.md. `make proto-python` calls grpcio-tools directly (no
+# network dependency); this buf.gen.yaml is kept for anyone who has buf +
+# network access and wants remote-plugin codegen as an alternative, and as
+# the eventual home for Go codegen once gateway-go's module exists (Phase 4).
+#
 # Generated code is never committed (see /.gitignore -> proto/gen/) — every
-# service regenerates its stubs from these contracts via `make proto`, so
-# the .proto files stay the single source of truth and can't drift from
-# checked-in generated code.
+# service regenerates its stubs from these contracts, so the .proto files
+# stay the single source of truth and can't drift from checked-in generated
+# code.
 plugins:
   - remote: buf.build/protocolbuffers/go
     out: gen/go

@@ -43,22 +43,30 @@ later is a non-breaking change; renaming fields in place is not.
 
 ## Regenerating stubs
 
-Codegen uses [buf](https://buf.build) rather than raw `protoc` invocations,
-so linting and breaking-change detection run from the same config used to
-generate code.
+Two separate tools, deliberately not one:
+
+- **Codegen** (`make proto-python`, and `make proto-go` from Phase 4) uses
+  each language's native toolchain directly — `grpcio-tools` for Python,
+  `protoc-gen-go`/`protoc-gen-go-grpc` for Go. No network access required
+  beyond the one-time `pip`/`go install`, so it works the same in a laptop
+  with no internet as it does in CI.
+- **Contract safety** (`make proto-lint`, `make proto-breaking`) uses
+  [buf](https://buf.build) — it's a better linter and breaking-change
+  detector than anything the native toolchains ship with, but it's not
+  required just to generate code.
 
 ```bash
-# one-time install
-go install github.com/bufbuild/buf/cmd/buf@latest
+# Python stubs — requires the ml-service venv active
+cd ml-service && python -m venv .venv && .venv/Scripts/pip install -e ".[dev]"
+cd .. && make proto-python
 
-# from proto/
-buf lint
-buf generate
+# lint + breaking-change check (optional, requires buf)
+go install github.com/bufbuild/buf/cmd/buf@latest
+make proto-lint
+make proto-breaking
 ```
 
-`buf generate` writes to `gen/go/` and `gen/python/`, both gitignored —
-generated code is never committed; every service regenerates it as part of
-its build (`make proto` at the repo root, wired up in Phase 3/4).
-
-`buf breaking --against '.git#branch=main'` runs in CI (Phase 19) to fail a
-PR that breaks the wire contract without bumping the package version.
+Generated code is written to `gen/go/` and `gen/python/`, both gitignored —
+it is never committed; every service regenerates it as part of its own
+build. `proto-breaking` runs in CI (Phase 19) to fail a PR that breaks the
+wire contract without bumping the package version.

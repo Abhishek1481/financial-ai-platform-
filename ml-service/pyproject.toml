@@ -1,0 +1,45 @@
+[project]
+name = "ml-service"
+version = "0.1.0"
+description = "gRPC service owning embeddings, RAG, summarization, and evaluation for the Financial Intelligence AI Platform."
+requires-python = ">=3.11"
+dependencies = [
+    "grpcio>=1.83,<2",
+    "grpcio-health-checking>=1.83,<2",
+    "grpcio-reflection>=1.83,<2",
+    "pydantic-settings>=2.14,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "grpcio-tools>=1.83,<2",
+    "pytest>=8,<9",
+    "pytest-asyncio>=0.24,<1",
+    "ruff>=0.6,<1",
+    "mypy>=1.11,<2",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint.isort]
+# The generated gRPC stubs (proto/gen/python/{common,ingestion,embeddings,
+# search,rag,evaluation}) are put on sys.path by app/_bootstrap.py, which
+# must execute before any of them are imported. Declaring them first-party
+# groups them with `app.*` instead of third-party libs — and since "app"
+# sorts alphabetically first in that group, `from app import _bootstrap`
+# always lands before the generated-stub imports, even after `ruff --fix`.
+known-first-party = ["app", "common", "embeddings", "evaluation", "ingestion", "rag", "search"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
