@@ -39,14 +39,16 @@ const (
 const maxUploadBufferBytes = 64 << 20 // 64 MiB
 
 const extractionTimeout = 2 * time.Minute
+const embeddingTimeout = 3 * time.Minute
 
 type Service struct {
-	logger *slog.Logger
-	docs   DocumentRepository
-	jobs   JobRepository
-	store  storage.ObjectStore
-	ml     Extractor
-	pool   *worker.Pool[Job]
+	logger    *slog.Logger
+	docs      DocumentRepository
+	jobs      JobRepository
+	store     storage.ObjectStore
+	extractor Extractor
+	embedder  Embedder
+	pool      *worker.Pool[Job]
 }
 
 func NewService(
@@ -54,10 +56,18 @@ func NewService(
 	docs DocumentRepository,
 	jobs JobRepository,
 	store storage.ObjectStore,
-	ml Extractor,
+	extractor Extractor,
+	embedder Embedder,
 	workers, queueSize int,
 ) *Service {
-	s := &Service{logger: logger, docs: docs, jobs: jobs, store: store, ml: ml}
+	s := &Service{
+		logger:    logger,
+		docs:      docs,
+		jobs:      jobs,
+		store:     store,
+		extractor: extractor,
+		embedder:  embedder,
+	}
 	s.pool = worker.NewPool(workers, queueSize, s.processJob)
 	return s
 }
@@ -183,31 +193,41 @@ func (s *Service) GetLatestJob(ctx context.Context, documentID string) (Job, err
 
 // processJob is the worker pool's ProcessFunc — it runs on the pool's
 // background context, well after the HTTP request that created the job
-// has already returned.
+// has already returned. It chains two ml-service calls: extraction, then
+// embedding of the text extraction produced. They're chained here, in Go,
+// rather than inside ml-service, keeping ml-service's RPCs independently
+// callable (and independently testable) and leaving job/status tracking
+// entirely on the Go side — see proto/README.md's "why these RPC shapes."
 func (s *Service) processJob(ctx context.Context, job Job) {
-	job.Status = JobStatusProcessing
+	doc, ok := s.extract(ctx, &job)
+	if !ok {
+		return
+	}
+	s.embed(ctx, &job, doc)
+}
+
+func (s *Service) extract(ctx context.Context, job *Job) (Document, bool) {
+	job.Status = JobStatusExtracting
 	job.UpdatedAt = time.Now()
-	if err := s.jobs.Update(ctx, job); err != nil {
-		s.logger.Error("failed to mark job processing", "job_id", job.ID, "error", err)
+	if err := s.jobs.Update(ctx, *job); err != nil {
+		s.logger.Error("failed to mark job extracting", "job_id", job.ID, "error", err)
 	}
 
 	doc, err := s.docs.FindByID(ctx, job.DocumentID)
 	if err != nil {
-		s.failJob(ctx, job, fmt.Errorf("load document: %w", err))
-		return
+		s.failJob(ctx, *job, fmt.Errorf("load document: %w", err))
+		return Document{}, false
 	}
 
 	extractCtx, cancel := context.WithTimeout(ctx, extractionTimeout)
 	defer cancel()
 
-	resp, err := s.ml.ExtractDocument(extractCtx, doc.ID, doc.StorageURI, doc.DocType)
+	resp, err := s.extractor.ExtractDocument(extractCtx, doc.ID, doc.StorageURI, doc.DocType)
 	if err != nil {
-		s.failJob(ctx, job, err)
-		return
+		s.failJob(ctx, *job, err)
+		return Document{}, false
 	}
 
-	now := time.Now()
-	job.Status = JobStatusCompleted
 	job.ExtractedText = resp.GetRawText()
 	job.TableCount = len(resp.GetTables())
 	job.PageCount = int(resp.GetPageCount())
@@ -219,17 +239,52 @@ func (s *Service) processJob(ctx context.Context, job Job) {
 			FiscalPeriod: md.GetFiscalPeriod(),
 		}
 	}
-	job.UpdatedAt = now
-	job.CompletedAt = &now
-	if err := s.jobs.Update(ctx, job); err != nil {
-		s.logger.Error("failed to mark job completed", "job_id", job.ID, "error", err)
-	}
 
 	s.logger.Info("document extraction completed",
 		"job_id", job.ID,
 		"document_id", doc.ID,
 		"text_length", len(job.ExtractedText),
 		"table_count", job.TableCount,
+	)
+	return doc, true
+}
+
+func (s *Service) embed(ctx context.Context, job *Job, doc Document) {
+	job.Status = JobStatusEmbedding
+	job.UpdatedAt = time.Now()
+	if err := s.jobs.Update(ctx, *job); err != nil {
+		s.logger.Error("failed to mark job embedding", "job_id", job.ID, "error", err)
+	}
+
+	embedCtx, cancel := context.WithTimeout(ctx, embeddingTimeout)
+	defer cancel()
+
+	progress, err := s.embedder.ChunkAndEmbed(embedCtx, doc.ID, job.ExtractedText, &commonv1.FinancialMetadata{
+		Ticker:       job.Metadata.Ticker,
+		CompanyName:  job.Metadata.CompanyName,
+		FilingType:   job.Metadata.FilingType,
+		FiscalPeriod: job.Metadata.FiscalPeriod,
+	})
+	if err != nil {
+		s.failJob(ctx, *job, err)
+		return
+	}
+
+	now := time.Now()
+	job.Status = JobStatusCompleted
+	job.ChunkCount = int(progress.GetChunksTotal())
+	job.ChunksSkippedDuplicate = int(progress.GetChunksSkippedDuplicate())
+	job.UpdatedAt = now
+	job.CompletedAt = &now
+	if err := s.jobs.Update(ctx, *job); err != nil {
+		s.logger.Error("failed to mark job completed", "job_id", job.ID, "error", err)
+	}
+
+	s.logger.Info("document embedding completed",
+		"job_id", job.ID,
+		"document_id", doc.ID,
+		"chunk_count", job.ChunkCount,
+		"chunks_skipped_duplicate", job.ChunksSkippedDuplicate,
 	)
 }
 

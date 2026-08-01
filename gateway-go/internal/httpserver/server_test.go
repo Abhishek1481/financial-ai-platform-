@@ -13,6 +13,7 @@ import (
 	"time"
 
 	commonv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/common/v1"
+	embeddingsv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/embeddings/v1"
 	ingestionv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/ingestion/v1"
 
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/auth"
@@ -47,6 +48,26 @@ func (f *fakeExtractor) ExtractDocument(
 	return &ingestionv1.ExtractDocumentResponse{RawText: "fake extracted text", PageCount: 1}, nil
 }
 
+// fakeEmbedder is fakeExtractor's counterpart for ingestion.Embedder.
+type fakeEmbedder struct {
+	respFn func(rawText string) (*embeddingsv1.ChunkAndEmbedProgress, error)
+}
+
+func (f *fakeEmbedder) ChunkAndEmbed(
+	ctx context.Context,
+	documentID, rawText string,
+	metadata *commonv1.FinancialMetadata,
+) (*embeddingsv1.ChunkAndEmbedProgress, error) {
+	if f.respFn != nil {
+		return f.respFn(rawText)
+	}
+	return &embeddingsv1.ChunkAndEmbedProgress{
+		Stage:       embeddingsv1.EmbedStage_EMBED_STAGE_COMPLETE,
+		ChunksTotal: 1,
+		ChunkIds:    []string{"fake-chunk-1"},
+	}, nil
+}
+
 // startTestServer binds both listeners on ephemeral (":0") ports, starts
 // serving in the background, and registers cleanup to shut the server down
 // — mirrors the build/start split ml-service's Python test suite uses for
@@ -58,7 +79,12 @@ func startTestServer(t *testing.T) *Server {
 	return startTestServerWithExtractor(t, &fakeExtractor{})
 }
 
-func startTestServerWithExtractor(t *testing.T, ml ingestion.Extractor) *Server {
+func startTestServerWithExtractor(t *testing.T, extractor ingestion.Extractor) *Server {
+	t.Helper()
+	return startTestServerWithMLDeps(t, extractor, &fakeEmbedder{})
+}
+
+func startTestServerWithMLDeps(t *testing.T, extractor ingestion.Extractor, embedder ingestion.Embedder) *Server {
 	t.Helper()
 
 	cfg := config.Config{
@@ -89,7 +115,8 @@ func startTestServerWithExtractor(t *testing.T, ml ingestion.Extractor) *Server 
 		ingestion.NewMemoryDocumentRepository(),
 		ingestion.NewMemoryJobRepository(),
 		objectStore,
-		ml,
+		extractor,
+		embedder,
 		2, 10,
 	)
 	workerCtx, cancelWorkers := context.WithCancel(context.Background())
@@ -459,6 +486,7 @@ func TestDocuments_UploadAndPollUntilCompleted(t *testing.T) {
 		Job struct {
 			Status               string `json:"status"`
 			ExtractedTextPreview string `json:"extracted_text_preview"`
+			ChunkCount           int    `json:"chunk_count"`
 		} `json:"job"`
 	}
 	for time.Now().Before(deadline) {
@@ -476,6 +504,14 @@ func TestDocuments_UploadAndPollUntilCompleted(t *testing.T) {
 
 	if doc.Job.Status != "completed" {
 		t.Fatalf("job status = %q after polling, want %q", doc.Job.Status, "completed")
+	}
+	// Regression check: jobStatusView's ChunkCount field was added but
+	// the GetDocument handler's struct literal wasn't updated to
+	// populate it from job.ChunkCount, so this silently stayed 0 despite
+	// the domain layer tracking it correctly — caught via live
+	// end-to-end testing, not by the unit tests alone.
+	if doc.Job.ChunkCount != 1 {
+		t.Errorf("ChunkCount = %d, want 1", doc.Job.ChunkCount)
 	}
 	if doc.Job.ExtractedTextPreview != "fake extracted text" {
 		t.Errorf("ExtractedTextPreview = %q, want %q", doc.Job.ExtractedTextPreview, "fake extracted text")

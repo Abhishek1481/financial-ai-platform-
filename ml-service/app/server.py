@@ -20,6 +20,8 @@ from grpc_reflection.v1alpha import reflection
 
 from app import _bootstrap  # noqa: F401  (must run before generated-stub imports)
 from app.config import Settings, get_settings
+from app.embeddings.model import EmbeddingModel
+from app.embeddings.vector_store import FaissVectorStore
 from app.logging import configure_logging, get_logger
 from app.servicers.embeddings import EmbeddingServicer
 from app.servicers.evaluation import EvaluationServicer
@@ -40,33 +42,45 @@ logger = get_logger(__name__)
 # marking it SERVING can't drift out of sync with each other.
 _ServiceRegistration = tuple[str, Callable[..., None], object]
 
-_SERVICES: tuple[_ServiceRegistration, ...] = (
-    (
-        ingestion_pb2.DESCRIPTOR.services_by_name["IngestionService"].full_name,
-        ingestion_pb2_grpc.add_IngestionServiceServicer_to_server,
-        IngestionServicer(),
-    ),
-    (
-        embeddings_pb2.DESCRIPTOR.services_by_name["EmbeddingService"].full_name,
-        embeddings_pb2_grpc.add_EmbeddingServiceServicer_to_server,
-        EmbeddingServicer(),
-    ),
-    (
-        search_pb2.DESCRIPTOR.services_by_name["SearchService"].full_name,
-        search_pb2_grpc.add_SearchServiceServicer_to_server,
-        SearchServicer(),
-    ),
-    (
-        rag_pb2.DESCRIPTOR.services_by_name["RAGService"].full_name,
-        rag_pb2_grpc.add_RAGServiceServicer_to_server,
-        RAGServicer(),
-    ),
-    (
-        evaluation_pb2.DESCRIPTOR.services_by_name["EvaluationService"].full_name,
-        evaluation_pb2_grpc.add_EvaluationServiceServicer_to_server,
-        EvaluationServicer(),
-    ),
-)
+
+def _build_services(settings: Settings) -> tuple[_ServiceRegistration, ...]:
+    # EmbeddingModel loads its weights lazily on first use, not here —
+    # constructing it is cheap and does not block server startup (see
+    # app/embeddings/model.py). FaissVectorStore only needs the
+    # dimension, a static config value, not the loaded model.
+    embedding_model = EmbeddingModel(settings.embedding_model_name)
+    vector_store = FaissVectorStore(
+        dimension=settings.embedding_dimension,
+        persist_dir=settings.vector_store_dir or None,
+    )
+
+    return (
+        (
+            ingestion_pb2.DESCRIPTOR.services_by_name["IngestionService"].full_name,
+            ingestion_pb2_grpc.add_IngestionServiceServicer_to_server,
+            IngestionServicer(),
+        ),
+        (
+            embeddings_pb2.DESCRIPTOR.services_by_name["EmbeddingService"].full_name,
+            embeddings_pb2_grpc.add_EmbeddingServiceServicer_to_server,
+            EmbeddingServicer(embedding_model, vector_store),
+        ),
+        (
+            search_pb2.DESCRIPTOR.services_by_name["SearchService"].full_name,
+            search_pb2_grpc.add_SearchServiceServicer_to_server,
+            SearchServicer(),
+        ),
+        (
+            rag_pb2.DESCRIPTOR.services_by_name["RAGService"].full_name,
+            rag_pb2_grpc.add_RAGServiceServicer_to_server,
+            RAGServicer(),
+        ),
+        (
+            evaluation_pb2.DESCRIPTOR.services_by_name["EvaluationService"].full_name,
+            evaluation_pb2_grpc.add_EvaluationServiceServicer_to_server,
+            EvaluationServicer(),
+        ),
+    )
 
 
 async def build_server(settings: Settings) -> tuple[grpc.aio.Server, int]:
@@ -83,7 +97,7 @@ async def build_server(settings: Settings) -> tuple[grpc.aio.Server, int]:
     health_servicer = health.aio.HealthServicer()
     health_pb2_grpc.add_HealthServicer_to_server(health_servicer, server)
 
-    for full_name, add_to_server, servicer in _SERVICES:
+    for full_name, add_to_server, servicer in _build_services(settings):
         add_to_server(servicer, server)
         reflected_service_names.append(full_name)
         # Every registered service reports SERVING immediately, even though

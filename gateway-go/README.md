@@ -6,12 +6,17 @@ streaming, caching (later phases) — never ML/NLP itself, which is
 `ml-service`'s job exclusively (see [`/docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md)
 for why the boundary is drawn this way).
 
-## Status (Phase 6)
+## Status (Phase 7)
 
 Phase 4 built the skeleton (HTTP lifecycle, logging, health/metrics).
-Phase 5 added JWT auth and RBAC. Phase 6 adds document ingestion: upload,
+Phase 5 added JWT auth and RBAC. Phase 6 added document ingestion: upload,
 dedup, and a bounded worker pool that calls `ml-service` over gRPC to
-extract text/tables/metadata.
+extract text/tables/metadata. Phase 7 chains a second ml-service call onto
+the same job: once extraction succeeds, the worker calls
+`EmbeddingService.ChunkAndEmbed` with the extracted text, and `Job` gains
+an `embedding` status between `extracting` and `completed` plus
+`chunk_count`/`chunks_skipped_duplicate` fields, surfaced through
+`GET /api/v1/documents/:id`.
 
 ```
 POST /api/v1/auth/register   {email, password} -> 201 {id, email, role}   (always role "user")

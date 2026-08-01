@@ -75,6 +75,7 @@ func main() {
 		ingestion.NewMemoryJobRepository(),
 		objectStore,
 		mlClient,
+		mlClient,
 		cfg.IngestionWorkers,
 		cfg.IngestionQueueSize,
 	)

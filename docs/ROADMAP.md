@@ -18,7 +18,7 @@ it's clear what's real vs. planned at any point in time.
 - [x] **Phase 6 — Document ingestion.** Concurrent upload handling in Go,
       job handoff to worker pool, text/table/metadata extraction in Python
       (PDF, DOCX, HTML, TXT, SEC filings).
-- [ ] **Phase 7 — Embedding pipeline.** Chunking, Sentence-Transformers
+- [x] **Phase 7 — Embedding pipeline.** Chunking, Sentence-Transformers
       embeddings, vector store (FAISS/OpenSearch), dedup, incremental
       updates.
 - [ ] **Phase 8 — Semantic + hybrid search.** Cosine similarity, metadata

@@ -94,8 +94,9 @@ func writeUploadError(c *gin.Context, err error) {
 }
 
 // extractedTextPreviewChars bounds the response body size for a
-// completed job — the full text is what Phase 7's embedding pipeline
-// consumes, not something an API client polling status needs in full.
+// completed job — the full text is what the vector store consumes
+// (chunked, embedded, and upserted server-side), not something an API
+// client polling status needs in full.
 const extractedTextPreviewChars = 500
 
 type inferredMetadataView struct {
@@ -106,13 +107,15 @@ type inferredMetadataView struct {
 }
 
 type jobStatusView struct {
-	Status               string                `json:"status"`
-	Error                string                `json:"error,omitempty"`
-	ExtractedTextPreview string                `json:"extracted_text_preview,omitempty"`
-	ExtractedTextLength  int                   `json:"extracted_text_length,omitempty"`
-	TableCount           int                   `json:"table_count,omitempty"`
-	PageCount            int                   `json:"page_count,omitempty"`
-	Metadata             *inferredMetadataView `json:"metadata,omitempty"`
+	Status                 string                `json:"status"`
+	Error                  string                `json:"error,omitempty"`
+	ExtractedTextPreview   string                `json:"extracted_text_preview,omitempty"`
+	ExtractedTextLength    int                   `json:"extracted_text_length,omitempty"`
+	TableCount             int                   `json:"table_count,omitempty"`
+	PageCount              int                   `json:"page_count,omitempty"`
+	Metadata               *inferredMetadataView `json:"metadata,omitempty"`
+	ChunkCount             int                   `json:"chunk_count,omitempty"`
+	ChunksSkippedDuplicate int                   `json:"chunks_skipped_duplicate,omitempty"`
 }
 
 type documentResponse struct {
@@ -151,13 +154,15 @@ func (h *DocumentHandlers) GetDocument(c *gin.Context) {
 		UploadedBy: doc.UploadedBy,
 		CreatedAt:  doc.CreatedAt.Format(time.RFC3339),
 		Job: jobStatusView{
-			Status:               string(job.Status),
-			Error:                job.Error,
-			ExtractedTextPreview: preview,
-			ExtractedTextLength:  len(job.ExtractedText),
-			TableCount:           job.TableCount,
-			PageCount:            job.PageCount,
-			Metadata:             metadataView(job.Metadata),
+			Status:                 string(job.Status),
+			Error:                  job.Error,
+			ExtractedTextPreview:   preview,
+			ExtractedTextLength:    len(job.ExtractedText),
+			TableCount:             job.TableCount,
+			PageCount:              job.PageCount,
+			Metadata:               metadataView(job.Metadata),
+			ChunkCount:             job.ChunkCount,
+			ChunksSkippedDuplicate: job.ChunksSkippedDuplicate,
 		},
 	})
 }

@@ -11,6 +11,9 @@ dependencies = [
     "pypdf>=5,<6",
     "python-docx>=1.1,<2",
     "beautifulsoup4>=4.12,<5",
+    "sentence-transformers>=5,<6",
+    "faiss-cpu>=1.13,<2",
+    "numpy>=2,<3",
 ]
 
 [project.optional-dependencies]
@@ -44,5 +47,8 @@ target-version = "py311"
 known-first-party = ["app", "common", "embeddings", "evaluation", "ingestion", "rag", "search"]
 
 [tool.mypy]
-python_version = "3.11"
+# numpy's own stub files use `type` statement syntax (Python 3.12+), so
+# this floor is set by a third-party dependency's stubs, not by this
+# project's own code — requires-python stays >=3.11 above.
+python_version = "3.12"
 ignore_missing_imports = true

@@ -7,21 +7,35 @@ summarization, and model evaluation. It has **no public HTTP port** —
 [`/proto`](../proto) for the contracts and [`/docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md)
 for why the boundary is drawn this way).
 
-## Status (Phase 6)
+## Status (Phase 7)
 
 Phase 3 built the skeleton: every RPC from every service in `/proto` is
 registered and reachable, the standard gRPC health-checking and reflection
-services are wired up, and the process starts/stops cleanly on signals. All
-but one still `context.abort()` with `UNIMPLEMENTED` and a message naming
-the phase that fills it in — the *set* of RPCs, and the health/reflection
-surface around them, has been stable since day one, so each phase fills in
-method bodies rather than growing the service's shape.
+services are wired up. Phase 6 filled in `IngestionService.ExtractDocument`
+(`app/extraction/` — PDF, DOCX, HTML, TXT, SEC filings). Phase 7 fills in
+`EmbeddingService`:
 
-Phase 6 fills in the first one: `IngestionService.ExtractDocument` actually
-reads a document (via `app/storage.py`, dispatching on the URI scheme
-gateway-go's ObjectStore wrote it with) and extracts text, tables, and
-best-effort metadata from it (`app/extraction/`) — PDF, DOCX, HTML, TXT,
-and SEC filings (treated as HTML/TXT plus filing-type inference).
+- `app/embeddings/chunking.py` — paragraph/sentence-aware character
+  chunking with cross-chunk overlap, no ML dependency.
+- `app/embeddings/model.py` — lazy-loaded `sentence-transformers`
+  (`all-MiniLM-L6-v2`, 384-dim, L2-normalized output), CPU-bound calls run
+  via `run_in_executor` so they never block the event loop.
+- `app/embeddings/vector_store.py` — `FaissVectorStore`: an in-process
+  `IndexFlatIP` (cosine similarity via inner product on normalized
+  vectors) optionally persisted to disk, content-hash dedup so identical
+  text (boilerplate repeated across filings) is embedded once and reused.
+- `ChunkAndEmbed` streams `EMBED_STAGE_{CHUNKING,DEDUPING,EMBEDDING,
+  UPSERTING,COMPLETE}` progress, matching the proto defined back in
+  Phase 2. `gateway-go`'s worker calls it immediately after
+  `ExtractDocument` succeeds (see `gateway-go/internal/ingestion.Service`)
+  — chained in Go, not inside ml-service.
+
+Verified with the real model end-to-end (not mocked): downloads/loads
+correctly, produces 384-dim normalized vectors where semantically similar
+financial text scores higher cosine similarity than unrelated text, and a
+live `gateway-go` + `ml-service` pair correctly extracts, embeds, and
+reports `chunk_count` back through the HTTP API over a real gRPC
+connection.
 
 ## Setup
 
