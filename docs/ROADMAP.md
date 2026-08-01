@@ -11,7 +11,7 @@ it's clear what's real vs. planned at any point in time.
       against it.
 - [x] **Phase 3 — `ml-service` skeleton.** gRPC server, config, health
       checks, project layout for `rag/`, `embeddings/`, `evaluation/`.
-- [ ] **Phase 4 — `gateway-go` skeleton.** Gin router, config, structured
+- [x] **Phase 4 — `gateway-go` skeleton.** Gin router, config, structured
       logging, graceful shutdown, `/healthz`, `/readyz`, `/metrics`.
 - [ ] **Phase 5 — Auth.** JWT issuance/validation, RBAC (admin/user)
       middleware in Go.

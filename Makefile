@@ -1,4 +1,4 @@
-.PHONY: proto proto-python proto-lint proto-breaking
+.PHONY: proto proto-python proto-lint proto-breaking gateway-build gateway-test gateway-run gateway-check
 
 # Regenerates gRPC stubs from proto/*.proto.
 #
@@ -31,3 +31,18 @@ proto-lint:
 
 proto-breaking:
 	cd proto && buf breaking --against '.git#branch=main'
+
+# gateway-go — module-scoped patterns (./gateway-go/...) so these work from
+# the repo root even though it's a Go workspace root, not a module itself.
+gateway-build:
+	go build ./gateway-go/...
+
+gateway-test:
+	go test ./gateway-go/...
+
+gateway-run:
+	go run ./gateway-go/cmd/gateway
+
+gateway-check:
+	go vet ./gateway-go/...
+	test -z "$$(gofmt -l gateway-go)"
