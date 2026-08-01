@@ -6,6 +6,8 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	commonv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/common/v1"
 	ragv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/rag/v1"
@@ -133,6 +135,74 @@ func (h *RAGHandlers) Query(c *gin.Context) {
 			return true
 		}
 	})
+}
+
+type summarizeResponseView struct {
+	Summary   string         `json:"summary"`
+	Citations []citationView `json:"citations"`
+	Usage     tokenUsageView `json:"usage"`
+	LatencyMs float64        `json:"latency_ms"`
+}
+
+// Summarize handles GET /api/v1/documents/:id/summary?type=executive|risk|
+// revenue|sentiment (default executive) — unary, unlike Query, since a
+// summary has no "watch it stream" requirement.
+func (h *RAGHandlers) Summarize(c *gin.Context) {
+	documentID := c.Param("id")
+
+	summaryType, err := parseSummaryType(c.Query("type"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	resp, err := h.answerer.Summarize(c.Request.Context(), documentID, summaryType)
+	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": "document has no embedded chunks"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "summarize failed"})
+		return
+	}
+
+	citations := make([]citationView, 0, len(resp.GetCitations()))
+	for _, cit := range resp.GetCitations() {
+		citations = append(citations, citationView{
+			ChunkID:    cit.GetChunkId(),
+			DocumentID: cit.GetDocumentId(),
+			Quote:      cit.GetQuote(),
+			PageNumber: cit.GetPageNumber(),
+			SourceURL:  cit.GetSourceUrl(),
+		})
+	}
+	usage := resp.GetUsage()
+	c.JSON(http.StatusOK, summarizeResponseView{
+		Summary:   resp.GetSummary(),
+		Citations: citations,
+		Usage: tokenUsageView{
+			PromptTokens:     usage.GetPromptTokens(),
+			CompletionTokens: usage.GetCompletionTokens(),
+			TotalTokens:      usage.GetTotalTokens(),
+		},
+		LatencyMs: float64(resp.GetLatencyMs()),
+	})
+}
+
+func parseSummaryType(raw string) (ragv1.SummaryType, error) {
+	switch raw {
+	case "", "executive":
+		return ragv1.SummaryType_SUMMARY_TYPE_EXECUTIVE, nil
+	case "risk":
+		return ragv1.SummaryType_SUMMARY_TYPE_RISK, nil
+	case "revenue":
+		return ragv1.SummaryType_SUMMARY_TYPE_REVENUE, nil
+	case "sentiment":
+		return ragv1.SummaryType_SUMMARY_TYPE_SENTIMENT, nil
+	default:
+		return ragv1.SummaryType_SUMMARY_TYPE_UNSPECIFIED,
+			fmt.Errorf("invalid type %q: must be executive, risk, revenue, or sentiment", raw)
+	}
 }
 
 func parseConversationRole(raw string) (commonv1.ConversationRole, error) {

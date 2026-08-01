@@ -206,3 +206,22 @@ func (c *Client) Query(ctx context.Context, req *ragv1.QueryRequest) (<-chan Que
 	}()
 	return ch, nil
 }
+
+// Summarize asks ml-service to generate one of the fixed summary types
+// (executive/risk/revenue/sentiment) over every embedded chunk of a
+// document. Unary — unlike Query, a summary has no "watch it stream" UX
+// requirement, so ml-service generates the whole thing before responding.
+func (c *Client) Summarize(
+	ctx context.Context,
+	documentID string,
+	summaryType ragv1.SummaryType,
+) (*ragv1.SummarizeResponse, error) {
+	resp, err := c.rag.Summarize(ctx, &ragv1.SummarizeRequest{
+		DocumentId: documentID,
+		Type:       summaryType,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("mlclient: Summarize: %w", err)
+	}
+	return resp, nil
+}

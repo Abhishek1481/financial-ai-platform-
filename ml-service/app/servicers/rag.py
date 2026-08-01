@@ -1,13 +1,17 @@
 """RAGService.Query: retrieval -> prompt construction -> streamed LLM call ->
-citation extraction. RAGService.Summarize lands in Phase 10.
+citation extraction. RAGService.Summarize: same LLM/citation machinery, but
+over every chunk of one document instead of a top-k retrieval slice, and
+unary — a summary has no "watch it stream" UX requirement the way an
+interactive answer does, so the whole text is generated before responding.
 
-Retrieval always runs hybrid (vector + keyword, fused) — unlike
+Query's retrieval always runs hybrid (vector + keyword, fused) — unlike
 SearchService.Search, callers here have no reason to pick a narrower mode;
 RAG wants the best available context, not a mode toggle.
 """
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import AsyncIterator
 
@@ -15,10 +19,10 @@ import grpc
 
 from app import _bootstrap  # noqa: F401  (must run before generated-stub imports)
 from app.embeddings.model import EmbeddingModel
-from app.embeddings.vector_store import VectorStore
+from app.embeddings.vector_store import ChunkRecord, VectorStore
 from app.rag.citations import build_citations
-from app.rag.llm_client import LLMClient, LLMFinal, LLMToken, LLMUsage
-from app.rag.prompt import build_messages
+from app.rag.llm_client import LLMClient, LLMFinal, LLMMessage, LLMToken, LLMUsage
+from app.rag.prompt import build_messages, build_summarize_messages
 from app.search.keyword_index import KeywordIndex
 from app.search.retrieval import DEFAULT_TOP_K, retrieve
 from common.v1 import common_pb2
@@ -93,7 +97,43 @@ class RAGServicer(rag_pb2_grpc.RAGServiceServicer):
         request: rag_pb2.SummarizeRequest,
         context: grpc.aio.ServicerContext,
     ) -> rag_pb2.SummarizeResponse:
-        await context.abort(
-            grpc.StatusCode.UNIMPLEMENTED,
-            "RAGService.Summarize is not implemented yet (Phase 10: Financial summarization).",
+        start = time.monotonic()
+        loop = asyncio.get_running_loop()
+
+        context_chunks: list[ChunkRecord] = await loop.run_in_executor(
+            None, self._store.get_by_document_id, request.document_id
         )
+        if not context_chunks:
+            await context.abort(
+                grpc.StatusCode.NOT_FOUND,
+                f"document {request.document_id!r} has no embedded chunks",
+            )
+            return
+
+        messages = build_summarize_messages(request.type, context_chunks)
+        generated_text, usage = await self._run_llm_to_completion(messages)
+        citations = build_citations(generated_text, context_chunks)
+        latency_ms = (time.monotonic() - start) * 1000
+
+        return rag_pb2.SummarizeResponse(
+            summary=generated_text,
+            citations=citations,
+            usage=common_pb2.TokenUsage(
+                prompt_tokens=usage.prompt_tokens,
+                completion_tokens=usage.completion_tokens,
+                total_tokens=usage.total_tokens,
+            ),
+            latency_ms=latency_ms,
+        )
+
+    async def _run_llm_to_completion(self, messages: list[LLMMessage]) -> tuple[str, LLMUsage]:
+        generated_parts: list[str] = []
+        usage = LLMUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+        async for event in self._llm_client.stream(
+            messages, temperature=self._temperature, max_tokens=self._max_tokens
+        ):
+            if isinstance(event, LLMToken):
+                generated_parts.append(event.text)
+            elif isinstance(event, LLMFinal):
+                usage = event.usage
+        return "".join(generated_parts), usage

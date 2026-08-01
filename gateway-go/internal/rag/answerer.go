@@ -15,4 +15,7 @@ import (
 
 type Answerer interface {
 	Query(ctx context.Context, req *ragv1.QueryRequest) (<-chan mlclient.QueryEvent, error)
+	Summarize(
+		ctx context.Context, documentID string, summaryType ragv1.SummaryType,
+	) (*ragv1.SummarizeResponse, error)
 }

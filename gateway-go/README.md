@@ -6,7 +6,7 @@ streaming, caching (later phases) — never ML/NLP itself, which is
 `ml-service`'s job exclusively (see [`/docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md)
 for why the boundary is drawn this way).
 
-## Status (Phase 9)
+## Status (Phase 10)
 
 Phase 4 built the skeleton (HTTP lifecycle, logging, health/metrics).
 Phase 5 added JWT auth and RBAC. Phase 6 added document ingestion: upload,
@@ -23,7 +23,11 @@ interface pattern as `Extractor`/`Embedder`). Phase 9 adds
 `mlclient.Client.Query` wraps the gRPC server-streaming call in a Go
 channel (`<-chan mlclient.QueryEvent`) so `RAGHandlers.Query` can relay
 generated tokens to the HTTP client live via Gin's `c.Stream()`, rather
-than draining the whole answer first the way `ChunkAndEmbed` does.
+than draining the whole answer first the way `ChunkAndEmbed` does. Phase
+10 adds `GET /api/v1/documents/:id/summary`, a unary call onto
+`RAGService.Summarize` — no streaming here, since a summary has no
+"watch it stream" requirement; `ml-service` returning `NOT_FOUND` for an
+unknown document maps onto a 404 via `google.golang.org/grpc/status`.
 
 ```
 POST /api/v1/auth/register   {email, password} -> 201 {id, email, role}   (always role "user")
@@ -35,6 +39,9 @@ POST /api/v1/documents        multipart: file, category (optional: "sec_filing")
                                -> 202 {document_id, job_id, status: "pending"}
                                -> 200 + reused:true if identical content was already uploaded
 GET  /api/v1/documents/:id    Bearer token -> 200 {..., job: {status, extracted_text_preview, table_count, metadata, ...}}
+GET  /api/v1/documents/:id/summary   Bearer token, ?type=executive|risk|revenue|sentiment (default executive)
+                               -> 200 {summary, citations, usage, latency_ms}
+                               -> 404 if the document has no embedded chunks
 
 GET  /api/v1/search           Bearer token, ?q=...&mode=semantic|keyword|hybrid&top_k=10
                                &tickers=AAPL,TSLA&filing_types=10-K&fiscal_period=FY2025-Q1

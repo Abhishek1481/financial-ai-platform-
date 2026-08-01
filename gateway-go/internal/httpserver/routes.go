@@ -32,6 +32,7 @@ func registerRoutes(engine *gin.Engine, deps Dependencies, maxUploadBytes int64)
 	documents.Use(authMW.Authenticate())
 	documents.POST("", documentHandlers.Upload)
 	documents.GET("/:id", documentHandlers.GetDocument)
+	documents.GET("/:id/summary", ragHandlers.Summarize)
 
 	v1.GET("/search", authMW.Authenticate(), searchHandlers.Search)
 	v1.POST("/rag/query", authMW.Authenticate(), ragHandlers.Query)

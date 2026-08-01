@@ -50,6 +50,12 @@ class VectorStore(Protocol):
         ...
 
     def get_by_chunk_id(self, chunk_id: str) -> ChunkRecord | None: ...
+    def get_by_document_id(self, document_id: str) -> list[ChunkRecord]:
+        """Every chunk belonging to one document, in chunk_index order —
+        used by RAGService.Summarize (app/servicers/rag.py) to gather the
+        full context for a document rather than a top-k retrieval slice."""
+        ...
+
     def all_records(self) -> list[ChunkRecord]:
         """Every stored record — used to rebuild KeywordIndex (BM25 has no
         native persistence of its own; see search/keyword_index.py) from
@@ -159,6 +165,11 @@ class FaissVectorStore:
         with self._lock:
             faiss_id = self._id_by_chunk_id.get(chunk_id)
             return self._records.get(faiss_id) if faiss_id is not None else None
+
+    def get_by_document_id(self, document_id: str) -> list[ChunkRecord]:
+        with self._lock:
+            matches = [r for r in self._records.values() if r.document_id == document_id]
+        return sorted(matches, key=lambda r: r.chunk_index)
 
     def all_records(self) -> list[ChunkRecord]:
         with self._lock:

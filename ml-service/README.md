@@ -7,7 +7,7 @@ summarization, and model evaluation. It has **no public HTTP port** —
 [`/proto`](../proto) for the contracts and [`/docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md)
 for why the boundary is drawn this way).
 
-## Status (Phase 9)
+## Status (Phase 10)
 
 Phase 3 built the skeleton: every RPC from every service in `/proto` is
 registered and reachable, the standard gRPC health-checking and reflection
@@ -90,6 +90,25 @@ uploaded a real document, embedded it, then streamed a real question
 through `POST /api/v1/rag/query` and watched SSE `token` events arrive
 live, followed by a `final` event whose citation resolved back to the
 uploaded document's actual chunk ID — not a canned response.
+
+Phase 10 fills in `RAGService.Summarize`: one of four fixed summary
+types (executive/risk/revenue/sentiment, each with its own system prompt
+in `app/rag/prompt.py`'s `build_summarize_messages`) generated over every
+chunk of one document — `VectorStore.get_by_document_id` (new this phase)
+gathers the full document rather than a top-k retrieval slice, since a
+summary needs to represent the whole thing, not just the parts most
+similar to a query. Unlike `Query`, `Summarize` is unary: a summary has no
+"watch it stream" UX requirement, so the servicer collects the full
+generated text (reusing the same `LLMClient`/citation-extraction
+machinery as `Query`) before responding. An unknown `document_id` (no
+embedded chunks) returns `NOT_FOUND`, not an empty summary.
+
+Verified end-to-end against a live `gateway-go` + `ml-service` pair:
+uploaded a real document, requested both an executive and a risk summary
+through `GET /api/v1/documents/:id/summary?type=...`, and confirmed each
+citation resolved back to the uploaded document's own chunk; also
+confirmed an unknown document ID returns 404 through the full gRPC
+NOT_FOUND -> HTTP path.
 
 ## Setup
 

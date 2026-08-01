@@ -25,7 +25,7 @@ it's clear what's real vs. planned at any point in time.
       filtering, top-k retrieval, hybrid (BM25 + vector).
 - [x] **Phase 9 — RAG + citations.** Retrieval, prompt construction, LLM
       call, citation extraction, streaming responses.
-- [ ] **Phase 10 — Financial summarization.** Executive/risk/revenue/
+- [x] **Phase 10 — Financial summarization.** Executive/risk/revenue/
       sentiment summaries.
 - [ ] **Phase 11 — Conversational QA.** Context-aware follow-up questions,
       conversation memory.

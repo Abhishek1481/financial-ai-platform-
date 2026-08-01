@@ -58,6 +58,12 @@ async def _query(server_port: int, **kwargs) -> list[rag_pb2.QueryResponseChunk]
         return [chunk async for chunk in stub.Query(rag_pb2.QueryRequest(**kwargs))]
 
 
+async def _summarize(server_port: int, **kwargs) -> rag_pb2.SummarizeResponse:
+    async with grpc.aio.insecure_channel(f"127.0.0.1:{server_port}") as channel:
+        stub = rag_pb2_grpc.RAGServiceStub(channel)
+        return await stub.Summarize(rag_pb2.SummarizeRequest(**kwargs))
+
+
 async def test_query_streams_tokens_then_a_final_chunk_with_citations(server_port: int):
     await _embed(
         server_port,
@@ -107,3 +113,45 @@ async def test_query_respects_metadata_filter(server_port: int):
 
     final = next(c for c in chunks if c.HasField("final")).final
     assert all(c.document_id == "doc-aapl" for c in final.citations)
+
+
+async def test_summarize_returns_a_summary_citing_the_documents_own_chunks(
+    server_port: int,
+):
+    await _embed(
+        server_port,
+        "doc-tesla",
+        "Tesla automotive revenue grew significantly this quarter.",
+    )
+    await _embed(server_port, "doc-other", "An unrelated document about gardening.")
+
+    response = await _summarize(
+        server_port, document_id="doc-tesla", type=rag_pb2.SUMMARY_TYPE_EXECUTIVE
+    )
+
+    assert response.summary != ""
+    assert len(response.citations) >= 1
+    assert all(c.document_id == "doc-tesla" for c in response.citations)
+    assert response.usage.completion_tokens > 0
+    assert response.latency_ms >= 0
+
+
+async def test_summarize_unknown_document_returns_not_found(server_port: int):
+    async with grpc.aio.insecure_channel(f"127.0.0.1:{server_port}") as channel:
+        stub = rag_pb2_grpc.RAGServiceStub(channel)
+        with pytest.raises(grpc.aio.AioRpcError) as exc_info:
+            await stub.Summarize(rag_pb2.SummarizeRequest(document_id="does-not-exist"))
+
+    assert exc_info.value.code() == grpc.StatusCode.NOT_FOUND
+
+
+async def test_summarize_defaults_to_executive_when_type_unspecified(server_port: int):
+    await _embed(
+        server_port,
+        "doc-tesla",
+        "Tesla automotive revenue grew significantly this quarter.",
+    )
+
+    response = await _summarize(server_port, document_id="doc-tesla")
+
+    assert response.summary != ""

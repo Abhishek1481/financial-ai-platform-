@@ -12,6 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	commonv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/common/v1"
 	embeddingsv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/embeddings/v1"
 	ingestionv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/ingestion/v1"
@@ -103,7 +106,8 @@ func (f *fakeSearcher) Search(
 // fake tokens then a final message over the same channel shape mlclient.Query
 // produces, so handlers.RAGHandlers is exercised without a live ml-service.
 type fakeAnswerer struct {
-	respFn func(req *ragv1.QueryRequest) []mlclient.QueryEvent
+	respFn      func(req *ragv1.QueryRequest) []mlclient.QueryEvent
+	summarizeFn func(documentID string, summaryType ragv1.SummaryType) (*ragv1.SummarizeResponse, error)
 }
 
 func (f *fakeAnswerer) Query(
@@ -128,6 +132,20 @@ func (f *fakeAnswerer) Query(
 	}
 	close(ch)
 	return ch, nil
+}
+
+func (f *fakeAnswerer) Summarize(
+	ctx context.Context, documentID string, summaryType ragv1.SummaryType,
+) (*ragv1.SummarizeResponse, error) {
+	if f.summarizeFn != nil {
+		return f.summarizeFn(documentID, summaryType)
+	}
+	return &ragv1.SummarizeResponse{
+		Summary:   "fake summary",
+		Citations: []*commonv1.Citation{{ChunkId: "fake-chunk-1", DocumentId: documentID}},
+		Usage:     &commonv1.TokenUsage{PromptTokens: 5, CompletionTokens: 2, TotalTokens: 7},
+		LatencyMs: 1,
+	}, nil
 }
 
 // startTestServer binds both listeners on ephemeral (":0") ports, starts
@@ -946,5 +964,115 @@ func TestRAGQuery_StreamsTokensThenAFinalEventWithCitations(t *testing.T) {
 	}
 	if !strings.Contains(body, `"total_tokens":45`) {
 		t.Errorf("SSE final event missing usage, got:\n%s", body)
+	}
+}
+
+func TestSummarize_RequiresAuth(t *testing.T) {
+	server := startTestServer(t)
+
+	resp := getWithToken(t, "http://"+server.HTTPAddr()+"/api/v1/documents/doc-1/summary", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
+	}
+}
+
+func TestSummarize_InvalidTypeIsRejected(t *testing.T) {
+	server := startTestServer(t)
+	baseURL := "http://" + server.HTTPAddr()
+
+	registerResp := postJSON(t, baseURL+"/api/v1/auth/register", map[string]string{
+		"email":    "summarize1@test.local",
+		"password": "correct-horse-battery",
+	})
+	registerResp.Body.Close()
+	token := login(t, baseURL, "summarize1@test.local", "correct-horse-battery")
+
+	resp := getWithToken(t, baseURL+"/api/v1/documents/doc-1/summary?type=nonsense", token)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusBadRequest)
+	}
+}
+
+func TestSummarize_UnknownDocumentReturns404(t *testing.T) {
+	answerer := &fakeAnswerer{
+		summarizeFn: func(documentID string, summaryType ragv1.SummaryType) (*ragv1.SummarizeResponse, error) {
+			return nil, status.Error(codes.NotFound, "document has no embedded chunks")
+		},
+	}
+	server := startTestServerWithMLDeps(t, &fakeExtractor{}, &fakeEmbedder{}, &fakeSearcher{}, answerer)
+	baseURL := "http://" + server.HTTPAddr()
+
+	registerResp := postJSON(t, baseURL+"/api/v1/auth/register", map[string]string{
+		"email":    "summarize2@test.local",
+		"password": "correct-horse-battery",
+	})
+	registerResp.Body.Close()
+	token := login(t, baseURL, "summarize2@test.local", "correct-horse-battery")
+
+	resp := getWithToken(t, baseURL+"/api/v1/documents/doc-missing/summary", token)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusNotFound)
+	}
+}
+
+func TestSummarize_ReturnsSummaryFromAnswerer(t *testing.T) {
+	answerer := &fakeAnswerer{
+		summarizeFn: func(documentID string, summaryType ragv1.SummaryType) (*ragv1.SummarizeResponse, error) {
+			if documentID != "doc-tesla" {
+				t.Errorf("documentID = %q, want %q", documentID, "doc-tesla")
+			}
+			if summaryType != ragv1.SummaryType_SUMMARY_TYPE_RISK {
+				t.Errorf("summaryType = %v, want SUMMARY_TYPE_RISK", summaryType)
+			}
+			return &ragv1.SummarizeResponse{
+				Summary: "Tesla faces battery supply chain risk. [1]",
+				Citations: []*commonv1.Citation{
+					{ChunkId: "chunk-1", DocumentId: "doc-tesla", Quote: "battery cell sourcing risk"},
+				},
+				Usage:     &commonv1.TokenUsage{PromptTokens: 50, CompletionTokens: 10, TotalTokens: 60},
+				LatencyMs: 12.5,
+			}, nil
+		},
+	}
+	server := startTestServerWithMLDeps(t, &fakeExtractor{}, &fakeEmbedder{}, &fakeSearcher{}, answerer)
+	baseURL := "http://" + server.HTTPAddr()
+
+	registerResp := postJSON(t, baseURL+"/api/v1/auth/register", map[string]string{
+		"email":    "summarize3@test.local",
+		"password": "correct-horse-battery",
+	})
+	registerResp.Body.Close()
+	token := login(t, baseURL, "summarize3@test.local", "correct-horse-battery")
+
+	resp := getWithToken(t, baseURL+"/api/v1/documents/doc-tesla/summary?type=risk", token)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	var body struct {
+		Summary   string `json:"summary"`
+		Citations []struct {
+			DocumentID string `json:"document_id"`
+		} `json:"citations"`
+		Usage struct {
+			TotalTokens int32 `json:"total_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("invalid response: %v", err)
+	}
+
+	if body.Summary != "Tesla faces battery supply chain risk. [1]" {
+		t.Errorf("summary = %q", body.Summary)
+	}
+	if len(body.Citations) != 1 || body.Citations[0].DocumentID != "doc-tesla" {
+		t.Errorf("unexpected citations: %+v", body.Citations)
+	}
+	if body.Usage.TotalTokens != 60 {
+		t.Errorf("total_tokens = %d, want 60", body.Usage.TotalTokens)
 	}
 }
