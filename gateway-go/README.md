@@ -6,17 +6,18 @@ streaming, caching (later phases) — never ML/NLP itself, which is
 `ml-service`'s job exclusively (see [`/docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md)
 for why the boundary is drawn this way).
 
-## Status (Phase 7)
+## Status (Phase 8)
 
 Phase 4 built the skeleton (HTTP lifecycle, logging, health/metrics).
 Phase 5 added JWT auth and RBAC. Phase 6 added document ingestion: upload,
 dedup, and a bounded worker pool that calls `ml-service` over gRPC to
-extract text/tables/metadata. Phase 7 chains a second ml-service call onto
+extract text/tables/metadata. Phase 7 chained a second ml-service call onto
 the same job: once extraction succeeds, the worker calls
-`EmbeddingService.ChunkAndEmbed` with the extracted text, and `Job` gains
-an `embedding` status between `extracting` and `completed` plus
-`chunk_count`/`chunks_skipped_duplicate` fields, surfaced through
-`GET /api/v1/documents/:id`.
+`EmbeddingService.ChunkAndEmbed`, and `Job` gained an `embedding` status
+plus `chunk_count`/`chunks_skipped_duplicate` fields. Phase 8 adds
+`GET /api/v1/search`, a thin query-parsing layer over
+`SearchService.Search` (`internal/search.Searcher` — same fake-for-tests
+interface pattern as `Extractor`/`Embedder`).
 
 ```
 POST /api/v1/auth/register   {email, password} -> 201 {id, email, role}   (always role "user")
@@ -28,6 +29,10 @@ POST /api/v1/documents        multipart: file, category (optional: "sec_filing")
                                -> 202 {document_id, job_id, status: "pending"}
                                -> 200 + reused:true if identical content was already uploaded
 GET  /api/v1/documents/:id    Bearer token -> 200 {..., job: {status, extracted_text_preview, table_count, metadata, ...}}
+
+GET  /api/v1/search           Bearer token, ?q=...&mode=semantic|keyword|hybrid&top_k=10
+                               &tickers=AAPL,TSLA&filing_types=10-K&fiscal_period=FY2025-Q1
+                               -> 200 {results: [{chunk_id, document_id, text, score, metadata}], search_latency_ms}
 ```
 
 User storage is in-memory (`internal/auth.MemoryUserRepository`); so are

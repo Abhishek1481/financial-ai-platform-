@@ -7,7 +7,7 @@ summarization, and model evaluation. It has **no public HTTP port** —
 [`/proto`](../proto) for the contracts and [`/docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md)
 for why the boundary is drawn this way).
 
-## Status (Phase 7)
+## Status (Phase 8)
 
 Phase 3 built the skeleton: every RPC from every service in `/proto` is
 registered and reachable, the standard gRPC health-checking and reflection
@@ -36,6 +36,30 @@ financial text scores higher cosine similarity than unrelated text, and a
 live `gateway-go` + `ml-service` pair correctly extracts, embeds, and
 reports `chunk_count` back through the HTTP API over a real gRPC
 connection.
+
+Phase 8 fills in `SearchService.Search` — semantic, keyword, and hybrid
+retrieval:
+
+- `app/search/keyword_index.py` — BM25+ (not classic Okapi BM25; see the
+  module docstring for why: at small document counts the classic IDF
+  formula hits exactly zero for most terms, silently breaking keyword
+  search until enough documents accumulate). Not persisted on its own
+  (rank_bm25 has no incremental/serialization support) — rebuilt from
+  `FaissVectorStore.all_records()` at startup instead.
+- `app/search/fusion.py` — Reciprocal Rank Fusion combines vector and
+  keyword rankings by position, not by trying to normalize two
+  incomparable score scales (cosine similarity vs. unbounded BM25).
+- `app/search/filter.py` — post-retrieval metadata filtering
+  (ticker/filing_type/fiscal_period); `filed_after`/`filed_before` are
+  accepted on the wire but not applied — nothing in the pipeline
+  populates a per-chunk filing date yet, documented as a known gap rather
+  than silently ignored.
+
+Verified end-to-end against a live `gateway-go` + `ml-service` pair:
+uploaded three documents on different topics, confirmed semantic search
+ranks a topically-related-but-keyword-dissimilar query correctly,
+keyword search finds only the exact term match, hybrid search blends
+both, and ticker filtering excludes non-matching documents.
 
 ## Setup
 

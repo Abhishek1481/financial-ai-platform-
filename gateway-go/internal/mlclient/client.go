@@ -1,7 +1,7 @@
 // Package mlclient is gateway-go's gRPC client to ml-service — the only
 // way any Go code in this repo talks to it (see /docs/ARCHITECTURE.md for
-// why that boundary is gRPC, not HTTP). Ingestion and embedding are
-// wrapped so far; Phase 8-12 add the search/RAG/evaluation clients here as
+// why that boundary is gRPC, not HTTP). Ingestion, embedding, and search
+// are wrapped so far; Phase 9-12 add the RAG/evaluation clients here as
 // those services grow real implementations.
 package mlclient
 
@@ -18,6 +18,7 @@ import (
 	commonv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/common/v1"
 	embeddingsv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/embeddings/v1"
 	ingestionv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/ingestion/v1"
+	searchv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/search/v1"
 )
 
 // Client owns the underlying connection to ml-service and exposes one
@@ -28,6 +29,7 @@ type Client struct {
 	conn       *grpc.ClientConn
 	ingestion  ingestionv1.IngestionServiceClient
 	embeddings embeddingsv1.EmbeddingServiceClient
+	search     searchv1.SearchServiceClient
 	health     grpc_health_v1.HealthClient
 }
 
@@ -50,6 +52,7 @@ func NewClient(addr string) (*Client, error) {
 		conn:       conn,
 		ingestion:  ingestionv1.NewIngestionServiceClient(conn),
 		embeddings: embeddingsv1.NewEmbeddingServiceClient(conn),
+		search:     searchv1.NewSearchServiceClient(conn),
 		health:     grpc_health_v1.NewHealthClient(conn),
 	}, nil
 }
@@ -131,4 +134,27 @@ func (c *Client) ChunkAndEmbed(
 		return nil, fmt.Errorf("mlclient: ChunkAndEmbed: server closed the stream without sending any progress")
 	}
 	return final, nil
+}
+
+// Search asks ml-service to run semantic/keyword/hybrid retrieval over
+// embedded chunks. Unary and on the request path — a user is waiting on
+// this call, unlike ExtractDocument/ChunkAndEmbed which run on a
+// background worker.
+func (c *Client) Search(
+	ctx context.Context,
+	query string,
+	topK int32,
+	mode searchv1.SearchMode,
+	filter *commonv1.MetadataFilter,
+) (*searchv1.SearchResponse, error) {
+	resp, err := c.search.Search(ctx, &searchv1.SearchRequest{
+		Query:  query,
+		TopK:   topK,
+		Mode:   mode,
+		Filter: filter,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("mlclient: Search: %w", err)
+	}
+	return resp, nil
 }

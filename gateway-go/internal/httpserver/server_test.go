@@ -15,11 +15,13 @@ import (
 	commonv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/common/v1"
 	embeddingsv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/embeddings/v1"
 	ingestionv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/ingestion/v1"
+	searchv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/search/v1"
 
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/auth"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/config"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/health"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/ingestion"
+	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/search"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/storage"
 )
 
@@ -68,6 +70,32 @@ func (f *fakeEmbedder) ChunkAndEmbed(
 	}, nil
 }
 
+// fakeSearcher is fakeExtractor's counterpart for search.Searcher.
+type fakeSearcher struct {
+	respFn func(query string) (*searchv1.SearchResponse, error)
+}
+
+func (f *fakeSearcher) Search(
+	ctx context.Context,
+	query string,
+	topK int32,
+	mode searchv1.SearchMode,
+	filter *commonv1.MetadataFilter,
+) (*searchv1.SearchResponse, error) {
+	if f.respFn != nil {
+		return f.respFn(query)
+	}
+	return &searchv1.SearchResponse{
+		Results: []*searchv1.ScoredChunk{
+			{
+				Chunk: &commonv1.Chunk{ChunkId: "fake-chunk-1", DocumentId: "fake-doc-1", Text: "fake result text"},
+				Score: 0.9,
+			},
+		},
+		SearchLatencyMs: 1,
+	}, nil
+}
+
 // startTestServer binds both listeners on ephemeral (":0") ports, starts
 // serving in the background, and registers cleanup to shut the server down
 // — mirrors the build/start split ml-service's Python test suite uses for
@@ -81,10 +109,12 @@ func startTestServer(t *testing.T) *Server {
 
 func startTestServerWithExtractor(t *testing.T, extractor ingestion.Extractor) *Server {
 	t.Helper()
-	return startTestServerWithMLDeps(t, extractor, &fakeEmbedder{})
+	return startTestServerWithMLDeps(t, extractor, &fakeEmbedder{}, &fakeSearcher{})
 }
 
-func startTestServerWithMLDeps(t *testing.T, extractor ingestion.Extractor, embedder ingestion.Embedder) *Server {
+func startTestServerWithMLDeps(
+	t *testing.T, extractor ingestion.Extractor, embedder ingestion.Embedder, searcher search.Searcher,
+) *Server {
 	t.Helper()
 
 	cfg := config.Config{
@@ -128,6 +158,7 @@ func startTestServerWithMLDeps(t *testing.T, extractor ingestion.Extractor, embe
 		AuthService: authService,
 		Tokens:      tokens,
 		Ingestion:   ingestionService,
+		Searcher:    searcher,
 	})
 	if err := server.Listen(); err != nil {
 		t.Fatalf("Listen() failed: %v", err)
@@ -639,5 +670,110 @@ func TestDocuments_InferredMetadataSurfacesInResponse(t *testing.T) {
 	}
 	if doc.Job.Metadata.FilingType != "10-K" {
 		t.Errorf("Metadata.FilingType = %q, want %q", doc.Job.Metadata.FilingType, "10-K")
+	}
+}
+
+func TestSearch_RequiresAuth(t *testing.T) {
+	server := startTestServer(t)
+
+	resp := getWithToken(t, "http://"+server.HTTPAddr()+"/api/v1/search?q=tesla", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
+	}
+}
+
+func TestSearch_MissingQueryParamIsRejected(t *testing.T) {
+	server := startTestServer(t)
+	baseURL := "http://" + server.HTTPAddr()
+
+	registerResp := postJSON(t, baseURL+"/api/v1/auth/register", map[string]string{
+		"email":    "searcher@test.local",
+		"password": "correct-horse-battery",
+	})
+	registerResp.Body.Close()
+	token := login(t, baseURL, "searcher@test.local", "correct-horse-battery")
+
+	resp := getWithToken(t, baseURL+"/api/v1/search", token)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusBadRequest)
+	}
+}
+
+func TestSearch_InvalidModeIsRejected(t *testing.T) {
+	server := startTestServer(t)
+	baseURL := "http://" + server.HTTPAddr()
+
+	registerResp := postJSON(t, baseURL+"/api/v1/auth/register", map[string]string{
+		"email":    "searcher2@test.local",
+		"password": "correct-horse-battery",
+	})
+	registerResp.Body.Close()
+	token := login(t, baseURL, "searcher2@test.local", "correct-horse-battery")
+
+	resp := getWithToken(t, baseURL+"/api/v1/search?q=tesla&mode=nonsense", token)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusBadRequest)
+	}
+}
+
+func TestSearch_ReturnsResultsFromSearcher(t *testing.T) {
+	searcher := &fakeSearcher{
+		respFn: func(query string) (*searchv1.SearchResponse, error) {
+			return &searchv1.SearchResponse{
+				Results: []*searchv1.ScoredChunk{
+					{
+						Chunk: &commonv1.Chunk{
+							ChunkId:    "chunk-1",
+							DocumentId: "doc-1",
+							Text:       "Tesla revenue grew significantly",
+							Metadata:   &commonv1.FinancialMetadata{Ticker: "TSLA"},
+						},
+						Score: 0.87,
+					},
+				},
+				SearchLatencyMs: 12.5,
+			}, nil
+		},
+	}
+	server := startTestServerWithMLDeps(t, &fakeExtractor{}, &fakeEmbedder{}, searcher)
+	baseURL := "http://" + server.HTTPAddr()
+
+	registerResp := postJSON(t, baseURL+"/api/v1/auth/register", map[string]string{
+		"email":    "searcher3@test.local",
+		"password": "correct-horse-battery",
+	})
+	registerResp.Body.Close()
+	token := login(t, baseURL, "searcher3@test.local", "correct-horse-battery")
+
+	resp := getWithToken(t, baseURL+"/api/v1/search?q=tesla+revenue&mode=hybrid&top_k=5", token)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	var body struct {
+		Results []struct {
+			ChunkID    string  `json:"chunk_id"`
+			DocumentID string  `json:"document_id"`
+			Text       string  `json:"text"`
+			Score      float32 `json:"score"`
+			Metadata   struct {
+				Ticker string `json:"ticker"`
+			} `json:"metadata"`
+		} `json:"results"`
+		SearchLatencyMs float64 `json:"search_latency_ms"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("invalid response: %v", err)
+	}
+
+	if len(body.Results) != 1 {
+		t.Fatalf("results count = %d, want 1", len(body.Results))
+	}
+	if body.Results[0].DocumentID != "doc-1" || body.Results[0].Metadata.Ticker != "TSLA" {
+		t.Errorf("unexpected result: %+v", body.Results[0])
 	}
 }

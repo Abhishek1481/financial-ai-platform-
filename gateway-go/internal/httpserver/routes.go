@@ -17,6 +17,7 @@ func registerRoutes(engine *gin.Engine, deps Dependencies, maxUploadBytes int64)
 	authMW := auth.NewMiddleware(deps.Tokens)
 	authHandlers := handlers.NewAuthHandlers(deps.AuthService)
 	documentHandlers := handlers.NewDocumentHandlers(deps.Ingestion, maxUploadBytes)
+	searchHandlers := handlers.NewSearchHandlers(deps.Searcher)
 
 	v1 := engine.Group("/api/v1")
 
@@ -30,6 +31,8 @@ func registerRoutes(engine *gin.Engine, deps Dependencies, maxUploadBytes int64)
 	documents.Use(authMW.Authenticate())
 	documents.POST("", documentHandlers.Upload)
 	documents.GET("/:id", documentHandlers.GetDocument)
+
+	v1.GET("/search", authMW.Authenticate(), searchHandlers.Search)
 
 	// Placeholder route proving RBAC actually gates access end-to-end;
 	// real admin endpoints (documents/users/jobs/metrics) arrive in

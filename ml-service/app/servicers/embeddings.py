@@ -23,15 +23,17 @@ from app.embeddings.chunking import DEFAULT_CHUNK_SIZE_CHARS, DEFAULT_OVERLAP_CH
 from app.embeddings.model import EmbeddingModel
 from app.embeddings.vector_store import ChunkRecord, VectorStore
 from app.logging import get_logger
+from app.search.keyword_index import KeywordIndex
 from embeddings.v1 import embeddings_pb2, embeddings_pb2_grpc
 
 logger = get_logger(__name__)
 
 
 class EmbeddingServicer(embeddings_pb2_grpc.EmbeddingServiceServicer):
-    def __init__(self, model: EmbeddingModel, store: VectorStore) -> None:
+    def __init__(self, model: EmbeddingModel, store: VectorStore, keyword_index: KeywordIndex) -> None:
         self._model = model
         self._store = store
+        self._keyword_index = keyword_index
 
     async def ChunkAndEmbed(
         self,
@@ -134,6 +136,10 @@ class EmbeddingServicer(embeddings_pb2_grpc.EmbeddingServiceServicer):
         vectors_array = _stack_vectors(cached_vectors, len(chunks), self._model.dimension)
 
         await loop.run_in_executor(None, self._store.upsert, records, vectors_array)
+        for record in records:
+            await loop.run_in_executor(
+                None, self._keyword_index.upsert, record.chunk_id, record.document_id, record.text
+            )
 
         logger.info(
             "document embedded",
@@ -160,6 +166,9 @@ class EmbeddingServicer(embeddings_pb2_grpc.EmbeddingServiceServicer):
         loop = asyncio.get_running_loop()
         deleted = await loop.run_in_executor(
             None, self._store.delete_by_document, request.document_id
+        )
+        await loop.run_in_executor(
+            None, self._keyword_index.delete_by_document, request.document_id
         )
         return embeddings_pb2.DeleteDocumentEmbeddingsResponse(chunks_deleted=deleted)
 

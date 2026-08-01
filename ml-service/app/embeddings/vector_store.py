@@ -48,6 +48,12 @@ class VectorStore(Protocol):
         appearing in a different document) instead of recomputing the
         embedding for content the model has already seen."""
         ...
+    def get_by_chunk_id(self, chunk_id: str) -> ChunkRecord | None: ...
+    def all_records(self) -> list[ChunkRecord]:
+        """Every stored record — used to rebuild KeywordIndex (BM25 has no
+        native persistence of its own; see search/keyword_index.py) from
+        whatever FaissVectorStore already persisted, on server startup."""
+        ...
 
 
 class FaissVectorStore:
@@ -147,6 +153,15 @@ class FaissVectorStore:
             if record is not None:
                 results.append(ScoredChunk(chunk=record, score=float(score)))
         return results
+
+    def get_by_chunk_id(self, chunk_id: str) -> ChunkRecord | None:
+        with self._lock:
+            faiss_id = self._id_by_chunk_id.get(chunk_id)
+            return self._records.get(faiss_id) if faiss_id is not None else None
+
+    def all_records(self) -> list[ChunkRecord]:
+        with self._lock:
+            return list(self._records.values())
 
     def get_by_content_hash(self, content_hash: str) -> ChunkRecord | None:
         with self._lock:

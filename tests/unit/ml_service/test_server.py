@@ -7,9 +7,11 @@ These exist to prove the skeleton itself is sound — service registration,
 health checks, graceful start/stop, and the UNIMPLEMENTED contract every
 unbuilt RPC honors — not to test business logic that doesn't exist yet.
 IngestionService.ExtractDocument was this file's original example of an
-unbuilt unary RPC until Phase 6 implemented it (see
-test_ingestion_servicer.py for its real tests now) — SearchService.Search
-takes its place here since it's still a stub.
+unbuilt unary RPC until Phase 6 implemented it, then SearchService.Search
+took its place until Phase 8 implemented that too (see
+test_ingestion_servicer.py / test_search_servicer.py for their real tests
+now) — RAGService.Summarize is the current stand-in, still a stub pending
+Phase 10.
 """
 
 from __future__ import annotations
@@ -24,7 +26,6 @@ from app.config import Settings
 from app.server import build_server
 from ingestion.v1 import ingestion_pb2
 from rag.v1 import rag_pb2, rag_pb2_grpc
-from search.v1 import search_pb2, search_pb2_grpc
 
 
 @pytest.fixture
@@ -60,9 +61,9 @@ async def test_unary_rpc_without_a_backing_implementation_returns_unimplemented(
     server_port: int,
 ) -> None:
     async with grpc.aio.insecure_channel(f"127.0.0.1:{server_port}") as channel:
-        stub = search_pb2_grpc.SearchServiceStub(channel)
+        stub = rag_pb2_grpc.RAGServiceStub(channel)
         with pytest.raises(grpc.aio.AioRpcError) as exc_info:
-            await stub.Search(search_pb2.SearchRequest(query="Tesla Q1 risks"))
+            await stub.Summarize(rag_pb2.SummarizeRequest(document_id="doc-1"))
 
     assert exc_info.value.code() == grpc.StatusCode.UNIMPLEMENTED
 

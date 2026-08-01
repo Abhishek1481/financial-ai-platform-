@@ -91,6 +91,7 @@ func main() {
 		AuthService: authService,
 		Tokens:      tokens,
 		Ingestion:   ingestionService,
+		Searcher:    mlClient,
 	})
 	if err := server.Listen(); err != nil {
 		logger.Error("failed to bind listeners", "error", err)

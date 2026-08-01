@@ -23,6 +23,7 @@ from app.config import Settings, get_settings
 from app.embeddings.model import EmbeddingModel
 from app.embeddings.vector_store import FaissVectorStore
 from app.logging import configure_logging, get_logger
+from app.search.keyword_index import KeywordIndex
 from app.servicers.embeddings import EmbeddingServicer
 from app.servicers.evaluation import EvaluationServicer
 from app.servicers.ingestion import IngestionServicer
@@ -53,6 +54,13 @@ def _build_services(settings: Settings) -> tuple[_ServiceRegistration, ...]:
         dimension=settings.embedding_dimension,
         persist_dir=settings.vector_store_dir or None,
     )
+    # BM25 has no persistence of its own (see keyword_index.py) — rebuilt
+    # here from whatever FaissVectorStore already loaded from disk, so a
+    # restart doesn't lose keyword searchability for previously-embedded
+    # documents.
+    keyword_index = KeywordIndex()
+    for record in vector_store.all_records():
+        keyword_index.upsert(record.chunk_id, record.document_id, record.text)
 
     return (
         (
@@ -63,12 +71,12 @@ def _build_services(settings: Settings) -> tuple[_ServiceRegistration, ...]:
         (
             embeddings_pb2.DESCRIPTOR.services_by_name["EmbeddingService"].full_name,
             embeddings_pb2_grpc.add_EmbeddingServiceServicer_to_server,
-            EmbeddingServicer(embedding_model, vector_store),
+            EmbeddingServicer(embedding_model, vector_store, keyword_index),
         ),
         (
             search_pb2.DESCRIPTOR.services_by_name["SearchService"].full_name,
             search_pb2_grpc.add_SearchServiceServicer_to_server,
-            SearchServicer(),
+            SearchServicer(embedding_model, vector_store, keyword_index),
         ),
         (
             rag_pb2.DESCRIPTOR.services_by_name["RAGService"].full_name,
