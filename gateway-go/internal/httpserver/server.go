@@ -16,9 +16,22 @@ import (
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/auth"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/config"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/health"
+	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/ingestion"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/metrics"
 	appmiddleware "github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/middleware"
 )
+
+// Dependencies is everything New needs beyond cfg/logger. A struct rather
+// than a growing positional-parameter list — Phase 7 onward keeps adding
+// services (embeddings, search, RAG), and a struct means each addition is
+// a new field, not a breaking change to every existing call site's
+// argument order.
+type Dependencies struct {
+	Readiness   *health.Readiness
+	AuthService *auth.Service
+	Tokens      *auth.TokenService
+	Ingestion   *ingestion.Service
+}
 
 // Server owns the public API listener and the internal metrics listener.
 // Listen and Serve are separate steps (rather than one blocking call) so
@@ -38,7 +51,7 @@ type Server struct {
 	metricsListener net.Listener
 }
 
-func New(cfg config.Config, logger *slog.Logger, readiness *health.Readiness, authService *auth.Service, tokens *auth.TokenService) *Server {
+func New(cfg config.Config, logger *slog.Logger, deps Dependencies) *Server {
 	gin.SetMode(ginMode(cfg.Environment))
 
 	engine := gin.New()
@@ -47,7 +60,7 @@ func New(cfg config.Config, logger *slog.Logger, readiness *health.Readiness, au
 		appmiddleware.Logging(logger),
 		metrics.Middleware(),
 	)
-	registerRoutes(engine, readiness, authService, tokens)
+	registerRoutes(engine, deps, cfg.MaxUploadSizeBytes)
 
 	metricsMux := http.NewServeMux()
 	metricsMux.Handle("/metrics", metrics.Handler())

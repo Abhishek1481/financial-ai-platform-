@@ -1,15 +1,18 @@
-.PHONY: proto proto-python proto-lint proto-breaking gateway-build gateway-test gateway-run gateway-check
+.PHONY: proto proto-python proto-go proto-lint proto-breaking gateway-build gateway-test gateway-run gateway-check
 
 # Regenerates gRPC stubs from proto/*.proto.
 #
-# Python codegen uses grpcio-tools directly (bundles its own protoc, no
-# network access required) rather than buf's remote plugins — this is what
-# actually runs in dev and CI. Requires the ml-service venv active:
+# Both proto-python and proto-go route through grpcio-tools' embedded
+# protoc (it isn't just a Python-code generator — protoc is a generic
+# compiler that shells out to protoc-gen-<lang> plugins on PATH, and
+# grpc_tools bundles a real protoc binary under the hood). That means
+# neither target needs a separate system-wide protoc install; proto-go
+# only additionally needs the Go plugins on PATH:
+#   go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+#   go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+# Requires the ml-service venv active either way:
 #   cd ml-service && python -m venv .venv && .venv/Scripts/pip install -e ".[dev]"
-#
-# Go codegen (protoc-gen-go / protoc-gen-go-grpc) is added in Phase 4 once
-# gateway-go's module exists.
-proto: proto-python
+proto: proto-python proto-go
 
 proto-python:
 	python -m grpc_tools.protoc \
@@ -17,6 +20,21 @@ proto-python:
 		--python_out=proto/gen/python \
 		--grpc_python_out=proto/gen/python \
 		--pyi_out=proto/gen/python \
+		proto/common/v1/common.proto \
+		proto/ingestion/v1/ingestion.proto \
+		proto/embeddings/v1/embeddings.proto \
+		proto/search/v1/search.proto \
+		proto/rag/v1/rag.proto \
+		proto/evaluation/v1/evaluation.proto
+
+# Output goes to proto/gen/go, its own workspace module (see /go.work) so
+# gateway-go — and scheduler/worker once they exist — can all depend on it
+# without duplicating codegen per service.
+proto-go:
+	python -m grpc_tools.protoc \
+		-I proto \
+		--go_out=proto/gen/go --go_opt=paths=source_relative \
+		--go-grpc_out=proto/gen/go --go-grpc_opt=paths=source_relative \
 		proto/common/v1/common.proto \
 		proto/ingestion/v1/ingestion.proto \
 		proto/embeddings/v1/embeddings.proto \

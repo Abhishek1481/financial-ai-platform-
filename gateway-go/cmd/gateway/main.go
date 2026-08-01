@@ -1,8 +1,7 @@
 // Command gateway is the entrypoint for gateway-go: the platform's only
-// public-facing service. It owns auth, rate limiting, routing, streaming,
-// and caching in later phases — this phase wires up config, structured
-// logging, health/readiness/metrics, and graceful shutdown, the load-
-// bearing plumbing every later phase builds on.
+// public-facing service. It owns auth, ingestion, rate limiting, routing,
+// streaming, and caching in later phases — this is the composition root
+// where every domain service gets constructed and wired together.
 package main
 
 import (
@@ -17,7 +16,10 @@ import (
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/config"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/health"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/httpserver"
+	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/ingestion"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/logging"
+	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/mlclient"
+	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/storage"
 )
 
 func main() {
@@ -34,11 +36,6 @@ func main() {
 		logger.Warn("using the default JWT signing secret — fine for local development, never for a deployed environment; set GATEWAY_JWT_SECRET")
 	}
 
-	// No checks registered yet: auth's user store is in-memory (no
-	// dependency to check), Phase 6 adds one for ml-service gRPC
-	// connectivity, Phase 13 for Redis, and Postgres once it replaces the
-	// in-memory user store. An instance with no known dependencies is
-	// trivially ready.
 	readiness := health.NewReadiness()
 
 	userRepo := auth.NewMemoryUserRepository()
@@ -53,7 +50,47 @@ func main() {
 		os.Exit(1)
 	}
 
-	server := httpserver.New(cfg, logger, readiness, authService, tokens)
+	objectStore, err := storage.NewLocalObjectStore(cfg.StorageDir)
+	if err != nil {
+		logger.Error("failed to initialize object storage", "error", err)
+		os.Exit(1)
+	}
+
+	mlClient, err := mlclient.NewClient(cfg.MLServiceAddr)
+	if err != nil {
+		logger.Error("failed to construct ml-service client", "error", err)
+		os.Exit(1)
+	}
+	defer mlClient.Close()
+	// ml-service connectivity has no bearing on whether THIS process is
+	// alive (that's /healthz) but every kind of document upload needs it
+	// to actually finish, so it belongs on /readyz. Dialing above is lazy
+	// (no I/O until first use), so a down ml-service at gateway-go startup
+	// shows up here, not as a boot failure.
+	readiness.Register("ml-service", mlClient.HealthCheck)
+
+	ingestionService := ingestion.NewService(
+		logger,
+		ingestion.NewMemoryDocumentRepository(),
+		ingestion.NewMemoryJobRepository(),
+		objectStore,
+		mlClient,
+		cfg.IngestionWorkers,
+		cfg.IngestionQueueSize,
+	)
+	// Runs against a long-lived context independent of any single HTTP
+	// request: extraction happens after the upload request that queued it
+	// has already returned 202.
+	workerCtx, cancelWorkers := context.WithCancel(context.Background())
+	defer cancelWorkers()
+	ingestionService.Start(workerCtx)
+
+	server := httpserver.New(cfg, logger, httpserver.Dependencies{
+		Readiness:   readiness,
+		AuthService: authService,
+		Tokens:      tokens,
+		Ingestion:   ingestionService,
+	})
 	if err := server.Listen(); err != nil {
 		logger.Error("failed to bind listeners", "error", err)
 		os.Exit(1)
@@ -62,6 +99,7 @@ func main() {
 		"http_addr", server.HTTPAddr(),
 		"metrics_addr", server.MetricsAddr(),
 		"environment", cfg.Environment,
+		"ml_service_addr", cfg.MLServiceAddr,
 	)
 
 	serveErrCh := make(chan error, 1)
@@ -87,5 +125,13 @@ func main() {
 		logger.Error("graceful shutdown failed", "error", err)
 		os.Exit(1)
 	}
+
+	// Only after the HTTP server has stopped accepting new uploads is it
+	// safe to drain the ingestion queue — draining first could still see
+	// new work arrive from in-flight upload requests.
+	if err := ingestionService.Stop(shutdownCtx); err != nil {
+		logger.Error("ingestion worker pool did not drain before shutdown deadline", "error", err)
+	}
+
 	logger.Info("gateway-go stopped")
 }

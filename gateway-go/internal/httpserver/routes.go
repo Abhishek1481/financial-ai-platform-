@@ -5,18 +5,18 @@ import (
 
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/auth"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/handlers"
-	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/health"
 )
 
 // registerRoutes wires every route this phase knows about. Kept out of
 // server.go (which only owns listener lifecycle) so adding a route in a
 // later phase never touches bind/serve/shutdown logic.
-func registerRoutes(engine *gin.Engine, readiness *health.Readiness, authService *auth.Service, tokens *auth.TokenService) {
+func registerRoutes(engine *gin.Engine, deps Dependencies, maxUploadBytes int64) {
 	engine.GET("/healthz", handlers.Healthz)
-	engine.GET("/readyz", readiness.Handler())
+	engine.GET("/readyz", deps.Readiness.Handler())
 
-	authMW := auth.NewMiddleware(tokens)
-	authHandlers := handlers.NewAuthHandlers(authService)
+	authMW := auth.NewMiddleware(deps.Tokens)
+	authHandlers := handlers.NewAuthHandlers(deps.AuthService)
+	documentHandlers := handlers.NewDocumentHandlers(deps.Ingestion, maxUploadBytes)
 
 	v1 := engine.Group("/api/v1")
 
@@ -25,6 +25,11 @@ func registerRoutes(engine *gin.Engine, readiness *health.Readiness, authService
 	authGroup.POST("/login", authHandlers.Login)
 
 	v1.GET("/me", authMW.Authenticate(), authHandlers.Me)
+
+	documents := v1.Group("/documents")
+	documents.Use(authMW.Authenticate())
+	documents.POST("", documentHandlers.Upload)
+	documents.GET("/:id", documentHandlers.GetDocument)
 
 	// Placeholder route proving RBAC actually gates access end-to-end;
 	// real admin endpoints (documents/users/jobs/metrics) arrive in

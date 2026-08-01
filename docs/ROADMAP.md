@@ -15,7 +15,7 @@ it's clear what's real vs. planned at any point in time.
       logging, graceful shutdown, `/healthz`, `/readyz`, `/metrics`.
 - [x] **Phase 5 — Auth.** JWT issuance/validation, RBAC (admin/user)
       middleware in Go.
-- [ ] **Phase 6 — Document ingestion.** Concurrent upload handling in Go,
+- [x] **Phase 6 — Document ingestion.** Concurrent upload handling in Go,
       job handoff to worker pool, text/table/metadata extraction in Python
       (PDF, DOCX, HTML, TXT, SEC filings).
 - [ ] **Phase 7 — Embedding pipeline.** Chunking, Sentence-Transformers

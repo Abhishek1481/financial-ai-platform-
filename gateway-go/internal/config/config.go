@@ -48,6 +48,24 @@ type Config struct {
 	// in production for the same reason as the JWT secret default.
 	AdminEmail    string
 	AdminPassword string
+
+	// MLServiceAddr is where the ml-service gRPC server (see
+	// ml-service/app/server.py) is reachable.
+	MLServiceAddr string
+
+	// StorageDir is where LocalObjectStore writes uploaded files — the
+	// dev/test stand-in for real object storage (Phase 16). Relative
+	// paths resolve against the process's working directory.
+	StorageDir string
+
+	MaxUploadSizeBytes int64
+
+	// IngestionWorkers/IngestionQueueSize size the bounded worker pool
+	// that calls ml-service to extract each uploaded document (see
+	// internal/worker.Pool) — the actual backpressure mechanism behind
+	// "concurrent document ingestion."
+	IngestionWorkers   int
+	IngestionQueueSize int
 }
 
 const (
@@ -69,6 +87,8 @@ func Load() (Config, error) {
 		JWTTTL:          0,
 		AdminEmail:      getEnv("GATEWAY_ADMIN_EMAIL", defaultAdminEmail),
 		AdminPassword:   getEnv("GATEWAY_ADMIN_PASSWORD", InsecureDefaultAdminPassword),
+		MLServiceAddr:   getEnv("GATEWAY_ML_SERVICE_ADDR", "localhost:50051"),
+		StorageDir:      getEnv("GATEWAY_STORAGE_DIR", "./data/documents"),
 	}
 
 	var err error
@@ -82,6 +102,19 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if cfg.JWTTTL, err = getEnvDuration("GATEWAY_JWT_TTL", time.Hour); err != nil {
+		return Config{}, err
+	}
+
+	maxUploadMB, err := getEnvInt("GATEWAY_MAX_UPLOAD_SIZE_MB", 25)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.MaxUploadSizeBytes = int64(maxUploadMB) << 20
+
+	if cfg.IngestionWorkers, err = getEnvInt("GATEWAY_INGESTION_WORKERS", 4); err != nil {
+		return Config{}, err
+	}
+	if cfg.IngestionQueueSize, err = getEnvInt("GATEWAY_INGESTION_QUEUE_SIZE", 100); err != nil {
 		return Config{}, err
 	}
 

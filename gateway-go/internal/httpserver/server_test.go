@@ -1,24 +1,51 @@
 package httpserver
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
+	commonv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/common/v1"
+	ingestionv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/ingestion/v1"
+
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/auth"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/config"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/health"
+	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/ingestion"
+	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/storage"
 )
 
 const (
 	testAdminEmail    = "admin@test.local"
 	testAdminPassword = "test-admin-password"
 )
+
+// fakeExtractor stands in for a live ml-service gRPC connection —
+// ingestion.Extractor is an interface specifically so this package's
+// integration tests don't need one running. See
+// internal/ingestion/service_test.go for the equivalent at the domain
+// layer.
+type fakeExtractor struct {
+	respFn func(uri string) (*ingestionv1.ExtractDocumentResponse, error)
+}
+
+func (f *fakeExtractor) ExtractDocument(
+	ctx context.Context,
+	documentID, uri string,
+	docType commonv1.DocumentType,
+) (*ingestionv1.ExtractDocumentResponse, error) {
+	if f.respFn != nil {
+		return f.respFn(uri)
+	}
+	return &ingestionv1.ExtractDocumentResponse{RawText: "fake extracted text", PageCount: 1}, nil
+}
 
 // startTestServer binds both listeners on ephemeral (":0") ports, starts
 // serving in the background, and registers cleanup to shut the server down
@@ -28,15 +55,21 @@ const (
 // RBAC over real HTTP requests rather than bypassing the API.
 func startTestServer(t *testing.T) *Server {
 	t.Helper()
+	return startTestServerWithExtractor(t, &fakeExtractor{})
+}
+
+func startTestServerWithExtractor(t *testing.T, ml ingestion.Extractor) *Server {
+	t.Helper()
 
 	cfg := config.Config{
-		Environment:     "test",
-		HTTPHost:        "127.0.0.1",
-		HTTPPort:        0,
-		MetricsHost:     "127.0.0.1",
-		MetricsPort:     0,
-		LogLevel:        "error",
-		ShutdownTimeout: 5 * time.Second,
+		Environment:        "test",
+		HTTPHost:           "127.0.0.1",
+		HTTPPort:           0,
+		MetricsHost:        "127.0.0.1",
+		MetricsPort:        0,
+		LogLevel:           "error",
+		ShutdownTimeout:    5 * time.Second,
+		MaxUploadSizeBytes: 10 << 20,
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	readiness := health.NewReadiness()
@@ -47,7 +80,28 @@ func startTestServer(t *testing.T) *Server {
 		t.Fatalf("SeedAdmin() failed: %v", err)
 	}
 
-	server := New(cfg, logger, readiness, authService, tokens)
+	objectStore, err := storage.NewLocalObjectStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewLocalObjectStore() failed: %v", err)
+	}
+	ingestionService := ingestion.NewService(
+		logger,
+		ingestion.NewMemoryDocumentRepository(),
+		ingestion.NewMemoryJobRepository(),
+		objectStore,
+		ml,
+		2, 10,
+	)
+	workerCtx, cancelWorkers := context.WithCancel(context.Background())
+	ingestionService.Start(workerCtx)
+	t.Cleanup(cancelWorkers)
+
+	server := New(cfg, logger, Dependencies{
+		Readiness:   readiness,
+		AuthService: authService,
+		Tokens:      tokens,
+		Ingestion:   ingestionService,
+	})
 	if err := server.Listen(); err != nil {
 		t.Fatalf("Listen() failed: %v", err)
 	}
@@ -67,6 +121,46 @@ func startTestServer(t *testing.T) *Server {
 	})
 
 	return server
+}
+
+// uploadFile builds and sends a multipart/form-data upload — real HTTP,
+// same encoding a browser or curl -F would send, not a shortcut around the
+// handler's actual parsing path.
+func uploadFile(t *testing.T, url, token, filename, content, category string) *http.Response {
+	t.Helper()
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", filename)
+	if err != nil {
+		t.Fatalf("CreateFormFile: %v", err)
+	}
+	if _, err := part.Write([]byte(content)); err != nil {
+		t.Fatalf("write file part: %v", err)
+	}
+	if category != "" {
+		if err := writer.WriteField("category", category); err != nil {
+			t.Fatalf("write category field: %v", err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, url, &body)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST %s failed: %v", url, err)
+	}
+	return resp
 }
 
 func TestServer_Healthz(t *testing.T) {
@@ -318,5 +412,196 @@ func TestAuth_AdminRouteRequiresAdminRole(t *testing.T) {
 	defer adminResp.Body.Close()
 	if adminResp.StatusCode != http.StatusOK {
 		t.Errorf("admin /admin/ping status = %d, want %d", adminResp.StatusCode, http.StatusOK)
+	}
+}
+
+func TestDocuments_UploadRequiresAuth(t *testing.T) {
+	server := startTestServer(t)
+
+	resp := uploadFile(t, "http://"+server.HTTPAddr()+"/api/v1/documents", "", "doc.txt", "content", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
+	}
+}
+
+func TestDocuments_UploadAndPollUntilCompleted(t *testing.T) {
+	server := startTestServer(t)
+	baseURL := "http://" + server.HTTPAddr()
+
+	registerResp := postJSON(t, baseURL+"/api/v1/auth/register", map[string]string{
+		"email":    "uploader@test.local",
+		"password": "correct-horse-battery",
+	})
+	registerResp.Body.Close()
+	token := login(t, baseURL, "uploader@test.local", "correct-horse-battery")
+
+	uploadResp := uploadFile(t, baseURL+"/api/v1/documents", token, "report.txt", "Q1 revenue grew 12%", "")
+	defer uploadResp.Body.Close()
+	if uploadResp.StatusCode != http.StatusAccepted {
+		t.Fatalf("upload status = %d, want %d", uploadResp.StatusCode, http.StatusAccepted)
+	}
+	var uploaded struct {
+		DocumentID string `json:"document_id"`
+		Status     string `json:"status"`
+	}
+	if err := json.NewDecoder(uploadResp.Body).Decode(&uploaded); err != nil {
+		t.Fatalf("invalid upload response: %v", err)
+	}
+	if uploaded.DocumentID == "" {
+		t.Fatal("upload response missing document_id")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var docResp *http.Response
+	var doc struct {
+		ID  string `json:"id"`
+		Job struct {
+			Status               string `json:"status"`
+			ExtractedTextPreview string `json:"extracted_text_preview"`
+		} `json:"job"`
+	}
+	for time.Now().Before(deadline) {
+		docResp = getWithToken(t, baseURL+"/api/v1/documents/"+uploaded.DocumentID, token)
+		if err := json.NewDecoder(docResp.Body).Decode(&doc); err != nil {
+			docResp.Body.Close()
+			t.Fatalf("invalid document response: %v", err)
+		}
+		docResp.Body.Close()
+		if doc.Job.Status == "completed" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	if doc.Job.Status != "completed" {
+		t.Fatalf("job status = %q after polling, want %q", doc.Job.Status, "completed")
+	}
+	if doc.Job.ExtractedTextPreview != "fake extracted text" {
+		t.Errorf("ExtractedTextPreview = %q, want %q", doc.Job.ExtractedTextPreview, "fake extracted text")
+	}
+}
+
+func TestDocuments_UploadUnsupportedFileTypeIsRejected(t *testing.T) {
+	server := startTestServer(t)
+	baseURL := "http://" + server.HTTPAddr()
+
+	registerResp := postJSON(t, baseURL+"/api/v1/auth/register", map[string]string{
+		"email":    "uploader2@test.local",
+		"password": "correct-horse-battery",
+	})
+	registerResp.Body.Close()
+	token := login(t, baseURL, "uploader2@test.local", "correct-horse-battery")
+
+	resp := uploadFile(t, baseURL+"/api/v1/documents", token, "malware.exe", "binary content", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnsupportedMediaType {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusUnsupportedMediaType)
+	}
+}
+
+func TestDocuments_DuplicateUploadReturns200(t *testing.T) {
+	server := startTestServer(t)
+	baseURL := "http://" + server.HTTPAddr()
+
+	registerResp := postJSON(t, baseURL+"/api/v1/auth/register", map[string]string{
+		"email":    "uploader3@test.local",
+		"password": "correct-horse-battery",
+	})
+	registerResp.Body.Close()
+	token := login(t, baseURL, "uploader3@test.local", "correct-horse-battery")
+
+	first := uploadFile(t, baseURL+"/api/v1/documents", token, "a.txt", "identical content", "")
+	first.Body.Close()
+	if first.StatusCode != http.StatusAccepted {
+		t.Fatalf("first upload status = %d, want %d", first.StatusCode, http.StatusAccepted)
+	}
+
+	second := uploadFile(t, baseURL+"/api/v1/documents", token, "b.txt", "identical content", "")
+	defer second.Body.Close()
+	if second.StatusCode != http.StatusOK {
+		t.Errorf("duplicate upload status = %d, want %d", second.StatusCode, http.StatusOK)
+	}
+}
+
+func TestDocuments_GetNonexistentDocumentReturns404(t *testing.T) {
+	server := startTestServer(t)
+	baseURL := "http://" + server.HTTPAddr()
+
+	registerResp := postJSON(t, baseURL+"/api/v1/auth/register", map[string]string{
+		"email":    "uploader4@test.local",
+		"password": "correct-horse-battery",
+	})
+	registerResp.Body.Close()
+	token := login(t, baseURL, "uploader4@test.local", "correct-horse-battery")
+
+	resp := getWithToken(t, baseURL+"/api/v1/documents/does-not-exist", token)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusNotFound)
+	}
+}
+
+func TestDocuments_InferredMetadataSurfacesInResponse(t *testing.T) {
+	ml := &fakeExtractor{
+		respFn: func(uri string) (*ingestionv1.ExtractDocumentResponse, error) {
+			return &ingestionv1.ExtractDocumentResponse{
+				RawText:   "Annual report content",
+				PageCount: 1,
+				InferredMetadata: &commonv1.FinancialMetadata{
+					FilingType: "10-K",
+				},
+			}, nil
+		},
+	}
+	server := startTestServerWithExtractor(t, ml)
+	baseURL := "http://" + server.HTTPAddr()
+
+	registerResp := postJSON(t, baseURL+"/api/v1/auth/register", map[string]string{
+		"email":    "sec-uploader@test.local",
+		"password": "correct-horse-battery",
+	})
+	registerResp.Body.Close()
+	token := login(t, baseURL, "sec-uploader@test.local", "correct-horse-battery")
+
+	uploadResp := uploadFile(t, baseURL+"/api/v1/documents", token, "filing.html", "<h1>FORM 10-K</h1>", "sec_filing")
+	defer uploadResp.Body.Close()
+	if uploadResp.StatusCode != http.StatusAccepted {
+		t.Fatalf("upload status = %d, want %d", uploadResp.StatusCode, http.StatusAccepted)
+	}
+	var uploaded struct {
+		DocumentID string `json:"document_id"`
+	}
+	if err := json.NewDecoder(uploadResp.Body).Decode(&uploaded); err != nil {
+		t.Fatalf("invalid upload response: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var doc struct {
+		Job struct {
+			Status   string `json:"status"`
+			Metadata struct {
+				FilingType string `json:"filing_type"`
+			} `json:"metadata"`
+		} `json:"job"`
+	}
+	for time.Now().Before(deadline) {
+		resp := getWithToken(t, baseURL+"/api/v1/documents/"+uploaded.DocumentID, token)
+		if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+			resp.Body.Close()
+			t.Fatalf("invalid document response: %v", err)
+		}
+		resp.Body.Close()
+		if doc.Job.Status == "completed" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	if doc.Job.Status != "completed" {
+		t.Fatalf("job status = %q after polling, want %q", doc.Job.Status, "completed")
+	}
+	if doc.Job.Metadata.FilingType != "10-K" {
+		t.Errorf("Metadata.FilingType = %q, want %q", doc.Job.Metadata.FilingType, "10-K")
 	}
 }

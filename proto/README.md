@@ -45,20 +45,32 @@ later is a non-breaking change; renaming fields in place is not.
 
 Two separate tools, deliberately not one:
 
-- **Codegen** (`make proto-python`, and `make proto-go` from Phase 4) uses
-  each language's native toolchain directly — `grpcio-tools` for Python,
-  `protoc-gen-go`/`protoc-gen-go-grpc` for Go. No network access required
-  beyond the one-time `pip`/`go install`, so it works the same in a laptop
-  with no internet as it does in CI.
+- **Codegen** (`make proto-python`, `make proto-go`) routes through
+  `grpcio-tools`' embedded `protoc` for *both* languages — it isn't just a
+  Python code generator, `protoc` is a generic compiler that shells out to
+  `protoc-gen-<lang>` plugins found on `PATH`, and `grpcio-tools` happens to
+  bundle a real `protoc` binary. So Go codegen needs no separate system
+  `protoc` install, only the two Go plugin binaries on `PATH`:
+  `go install google.golang.org/protobuf/cmd/protoc-gen-go@latest` and
+  `.../grpc/cmd/protoc-gen-go-grpc@latest`. No network access required
+  beyond those one-time installs, so it works the same on a laptop with no
+  internet as it does in CI.
 - **Contract safety** (`make proto-lint`, `make proto-breaking`) uses
   [buf](https://buf.build) — it's a better linter and breaking-change
   detector than anything the native toolchains ship with, but it's not
   required just to generate code.
 
 ```bash
-# Python stubs — requires the ml-service venv active
+# requires the ml-service venv active (bundles the protoc binary both
+# targets below actually use)
 cd ml-service && python -m venv .venv && .venv/Scripts/pip install -e ".[dev]"
-cd .. && make proto-python
+cd ..
+
+# Python stubs
+make proto-python
+
+# Go stubs — requires the two plugin installs above
+make proto-go
 
 # lint + breaking-change check (optional, requires buf)
 go install github.com/bufbuild/buf/cmd/buf@latest
@@ -66,7 +78,11 @@ make proto-lint
 make proto-breaking
 ```
 
-Generated code is written to `gen/go/` and `gen/python/`, both gitignored —
-it is never committed; every service regenerates it as part of its own
-build. `proto-breaking` runs in CI (Phase 19) to fail a PR that breaks the
-wire contract without bumping the package version.
+Generated code is written to `gen/go/` and `gen/python/`. The `.go`/`.py`
+files themselves are gitignored — never committed, every service
+regenerates them as part of its own build — but `gen/go/go.mod`/`go.sum`
+*are* committed: `gen/go` is its own Go module (see `/go.work`) that
+`gateway-go`, and later `scheduler`/`worker`, depend on, and that module
+boundary needs to exist even before its first `make proto-go` has run on a
+fresh checkout. `proto-breaking` runs in CI (Phase 19) to fail a PR that
+breaks the wire contract without bumping the package version.

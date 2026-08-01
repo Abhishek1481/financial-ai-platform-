@@ -6,23 +6,35 @@ streaming, caching (later phases) — never ML/NLP itself, which is
 `ml-service`'s job exclusively (see [`/docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md)
 for why the boundary is drawn this way).
 
-## Status (Phase 5)
+## Status (Phase 6)
 
-Phase 4 built the skeleton: HTTP server lifecycle (bind → serve → graceful
-shutdown), structured logging, liveness/readiness probes, Prometheus
-metrics on a separate internal port. Phase 5 adds the first real feature:
-JWT authentication and role-based access control.
+Phase 4 built the skeleton (HTTP lifecycle, logging, health/metrics).
+Phase 5 added JWT auth and RBAC. Phase 6 adds document ingestion: upload,
+dedup, and a bounded worker pool that calls `ml-service` over gRPC to
+extract text/tables/metadata.
 
 ```
 POST /api/v1/auth/register   {email, password} -> 201 {id, email, role}   (always role "user")
 POST /api/v1/auth/login      {email, password} -> 200 {access_token, token_type, expires_in}
 GET  /api/v1/me               Bearer token      -> 200 {id, email, role}
 GET  /api/v1/admin/ping       Bearer token, admin role only -> 200 {message}
+
+POST /api/v1/documents        multipart: file, category (optional: "sec_filing")
+                               -> 202 {document_id, job_id, status: "pending"}
+                               -> 200 + reused:true if identical content was already uploaded
+GET  /api/v1/documents/:id    Bearer token -> 200 {..., job: {status, extracted_text_preview, table_count, metadata, ...}}
 ```
 
-User storage is in-memory (`internal/auth.MemoryUserRepository`) — there is
-no Postgres connection wired up yet; see "Design decisions" below for why
-that's a deliberate, temporary stand-in rather than a gap.
+User storage is in-memory (`internal/auth.MemoryUserRepository`); so are
+documents and jobs (`internal/ingestion.Memory{Document,Job}Repository`).
+Uploaded files themselves land on the local filesystem
+(`internal/storage.LocalObjectStore`). None of this is Postgres/S3-backed
+yet — see "Design decisions" below for why that's deliberate.
+
+Verified with both real processes running together: `gateway-go` talking to
+a live `ml-service` over an actual gRPC connection, uploading real
+`.txt`/`.html`/`.docx`/`.pdf` files and polling until extraction completed
+— not just unit tests against fakes.
 
 ## Setup
 
@@ -66,13 +78,17 @@ holds itself to.
 
 ```
 gateway-go/
-├── cmd/gateway/main.go       entrypoint: config → logger → auth wiring → server → signal handling
+├── cmd/gateway/main.go       entrypoint / composition root: builds every dependency, wires the server
 ├── internal/
 │   ├── config/                env-driven config (prefix GATEWAY_)
 │   ├── logging/                log/slog JSON setup
 │   ├── health/                 readiness-check registry (liveness lives in handlers)
 │   ├── auth/                   JWT issuance/validation, RBAC middleware, user repository + service
-│   ├── handlers/                /healthz, /api/v1/auth/*, /api/v1/me, /api/v1/admin/*
+│   ├── storage/                 ObjectStore: local filesystem today, S3/MinIO in Phase 16
+│   ├── mlclient/                 gRPC client to ml-service (IngestionService today)
+│   ├── worker/                   generic bounded worker pool
+│   ├── ingestion/                 document/job domain: dedup, Upload, worker-pool wiring
+│   ├── handlers/                /healthz, /api/v1/auth/*, /api/v1/me, /api/v1/admin/*, /api/v1/documents*
 │   ├── metrics/                 Prometheus middleware + /metrics handler
 │   ├── middleware/              structured request logging, panic recovery
 │   └── httpserver/              wires it all together; owns listener/server lifecycle + routes
@@ -90,12 +106,58 @@ internet can reach is a needless information leak this avoids for free.
 
 **Liveness and readiness are different endpoints for a reason.** `/healthz`
 never checks a downstream dependency — it only proves the process is up.
-`/readyz` (`internal/health.Readiness`) aggregates named checks that later
-phases register (ml-service gRPC in Phase 6, Redis in Phase 13, Postgres
-once it replaces the in-memory user store). Kubernetes treats a failed
-liveness probe as "restart the pod" and a failed readiness probe as "stop
-routing traffic here" — conflating them means a flaky downstream dependency
-causes restart loops on a process that was never actually broken.
+`/readyz` (`internal/health.Readiness`) aggregates named checks; Phase 6
+registers the first one (`ml-service`, via `mlclient.Client.HealthCheck`
+calling ml-service's own standard gRPC health service), Redis joins in
+Phase 13, Postgres once it replaces the in-memory stores. Kubernetes treats
+a failed liveness probe as "restart the pod" and a failed readiness probe
+as "stop routing traffic here" — conflating them means a flaky downstream
+dependency causes restart loops on a process that was never actually
+broken.
+
+**`ingestion.Extractor` is an interface, not `*mlclient.Client` directly.**
+Same Repository-pattern reasoning as `auth.UserRepository`: `ingestion.Service`
+depends on the interface, `*mlclient.Client` happens to satisfy it
+structurally, and `internal/ingestion/service_test.go` substitutes a fake
+that never opens a socket. Caught during development, not after: the first
+draft had `Service` depending on the concrete client type, which would have
+made every ingestion test require a live ml-service process just to run.
+
+**A bounded worker pool is the actual "concurrent ingestion" story.**
+Accepting many simultaneous upload requests is just what `net/http` already
+does per-connection — no special engineering required. What needs
+deliberate design is preventing a burst of uploads from unboundedly
+fanning out into concurrent extraction RPCs that overwhelm `ml-service`.
+`internal/worker.Pool[T]` (generic, reusable beyond ingestion) fixes both
+the worker count (`GATEWAY_INGESTION_WORKERS`) and the queue depth
+(`GATEWAY_INGESTION_QUEUE_SIZE`); `Submit` returns `ErrQueueFull` rather
+than blocking when both are saturated, which the HTTP handler turns into a
+503 instead of a hung request.
+
+**Storage URIs, not bytes, cross the gRPC boundary.** `gateway-go` writes
+an upload to `ObjectStore` and hands ml-service the resulting URI (see
+`proto/ingestion/v1/ingestion.proto`'s `s3_uri` field) — the file itself
+never rides the RPC. `LocalObjectStore` writes `file://` URIs today;
+`ml-service/app/storage.py` reads them back via the same convention
+(verified with real files across the actual process boundary, not just
+matching string literals in two languages). Both sides dispatch on the URI
+scheme, so adding `s3://` support in Phase 16 touches one new
+implementation on each side, never the extraction/upload logic itself.
+
+**Content-hash dedup, checked before storage, not after.** `Service.Upload`
+buffers the full upload, hashes it, and checks
+`DocumentRepository.FindByContentHash` *before* writing to `ObjectStore` or
+queuing a job — a duplicate upload reuses the existing document and never
+touches ml-service again. The alternative (store first, dedup later) would
+mean paying storage and extraction cost for every duplicate before
+discovering it was one.
+
+**SEC filing category is caller-asserted, not content-sniffed.** EDGAR
+filings are, at the byte level, ordinary HTML or plain text — nothing in
+the bytes themselves says "this is a 10-K." `Service.Upload` accepts an
+explicit `category` field precisely because inferring it from content would
+mean guessing; the caller (which fetched the filing from EDGAR, or knows
+why the user is uploading it) already knows.
 
 **In-memory user storage, not Postgres, for now.** `auth.UserRepository` is
 an interface; `MemoryUserRepository` is one implementation, chosen because

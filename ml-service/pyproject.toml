@@ -8,6 +8,9 @@ dependencies = [
     "grpcio-health-checking>=1.83,<2",
     "grpcio-reflection>=1.83,<2",
     "pydantic-settings>=2.14,<3",
+    "pypdf>=5,<6",
+    "python-docx>=1.1,<2",
+    "beautifulsoup4>=4.12,<5",
 ]
 
 [project.optional-dependencies]
