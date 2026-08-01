@@ -26,7 +26,6 @@ func TestLoad_Defaults(t *testing.T) {
 }
 
 func TestLoad_EnvOverrides(t *testing.T) {
-	t.Setenv("GATEWAY_ENVIRONMENT", "production")
 	t.Setenv("GATEWAY_HTTP_PORT", "9999")
 	t.Setenv("GATEWAY_SHUTDOWN_TIMEOUT", "30s")
 
@@ -35,14 +34,43 @@ func TestLoad_EnvOverrides(t *testing.T) {
 		t.Fatalf("Load() returned error: %v", err)
 	}
 
-	if cfg.Environment != "production" {
-		t.Errorf("Environment = %q, want %q", cfg.Environment, "production")
-	}
 	if cfg.HTTPPort != 9999 {
 		t.Errorf("HTTPPort = %d, want %d", cfg.HTTPPort, 9999)
 	}
 	if cfg.ShutdownTimeout != 30*time.Second {
 		t.Errorf("ShutdownTimeout = %v, want %v", cfg.ShutdownTimeout, 30*time.Second)
+	}
+}
+
+func TestLoad_ProductionRejectsDefaultJWTSecret(t *testing.T) {
+	t.Setenv("GATEWAY_ENVIRONMENT", "production")
+	t.Setenv("GATEWAY_ADMIN_PASSWORD", "a-real-admin-password")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() in production with default JWT secret: expected error, got nil")
+	}
+}
+
+func TestLoad_ProductionRejectsDefaultAdminPassword(t *testing.T) {
+	t.Setenv("GATEWAY_ENVIRONMENT", "production")
+	t.Setenv("GATEWAY_JWT_SECRET", "a-real-secret")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() in production with default admin password: expected error, got nil")
+	}
+}
+
+func TestLoad_ProductionSucceedsWithRealSecretsSet(t *testing.T) {
+	t.Setenv("GATEWAY_ENVIRONMENT", "production")
+	t.Setenv("GATEWAY_JWT_SECRET", "a-real-secret")
+	t.Setenv("GATEWAY_ADMIN_PASSWORD", "a-real-admin-password")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if cfg.Environment != "production" {
+		t.Errorf("Environment = %q, want %q", cfg.Environment, "production")
 	}
 }
 

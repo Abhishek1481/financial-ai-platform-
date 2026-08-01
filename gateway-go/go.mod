@@ -1,10 +1,13 @@
 module github.com/Abhishek1481/financial-ai-platform/gateway-go
 
-go 1.23
+go 1.25.0
 
 require (
 	github.com/gin-gonic/gin v1.12.0
+	github.com/golang-jwt/jwt/v5 v5.3.1
+	github.com/google/uuid v1.6.0
 	github.com/prometheus/client_golang v1.24.1
+	golang.org/x/crypto v0.54.0
 )
 
 require (
@@ -38,7 +41,6 @@ require (
 	github.com/ugorji/go/codec v1.3.1 // indirect
 	go.mongodb.org/mongo-driver/v2 v2.5.0 // indirect
 	golang.org/x/arch v0.22.0 // indirect
-	golang.org/x/crypto v0.54.0 // indirect
 	golang.org/x/net v0.57.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.40.0 // indirect

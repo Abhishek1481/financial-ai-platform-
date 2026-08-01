@@ -11,7 +11,9 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
+	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/auth"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/config"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/health"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/httpserver"
@@ -28,12 +30,30 @@ func main() {
 	logger := logging.New(cfg.LogLevel)
 	slog.SetDefault(logger)
 
-	// No checks registered yet — Phase 5 adds one for the JWT signing
-	// key/DB, Phase 6 for ml-service gRPC connectivity, Phase 13 for
-	// Redis. An instance with no known dependencies is trivially ready.
+	if cfg.JWTSecret == config.InsecureDefaultJWTSecret {
+		logger.Warn("using the default JWT signing secret — fine for local development, never for a deployed environment; set GATEWAY_JWT_SECRET")
+	}
+
+	// No checks registered yet: auth's user store is in-memory (no
+	// dependency to check), Phase 6 adds one for ml-service gRPC
+	// connectivity, Phase 13 for Redis, and Postgres once it replaces the
+	// in-memory user store. An instance with no known dependencies is
+	// trivially ready.
 	readiness := health.NewReadiness()
 
-	server := httpserver.New(cfg, logger, readiness)
+	userRepo := auth.NewMemoryUserRepository()
+	tokens := auth.NewTokenService(cfg.JWTSecret, cfg.JWTTTL)
+	authService := auth.NewService(userRepo, tokens)
+
+	seedCtx, cancelSeed := context.WithTimeout(context.Background(), 5*time.Second)
+	err = authService.SeedAdmin(seedCtx, cfg.AdminEmail, cfg.AdminPassword)
+	cancelSeed()
+	if err != nil {
+		logger.Error("failed to seed admin account", "error", err)
+		os.Exit(1)
+	}
+
+	server := httpserver.New(cfg, logger, readiness, authService, tokens)
 	if err := server.Listen(); err != nil {
 		logger.Error("failed to bind listeners", "error", err)
 		os.Exit(1)

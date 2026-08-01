@@ -1,10 +1,8 @@
-go 1.23
+go 1.25.0
 
 // Each Go service (gateway-go now; scheduler and worker from Phase 6/13
 // onward) is its own module with its own go.mod — independently
 // versionable and buildable — but developed together via this workspace
 // so local changes to a shared package are visible across modules without
 // publishing a release first.
-use (
-	./gateway-go
-)
+use ./gateway-go

@@ -13,8 +13,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/auth"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/config"
-	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/handlers"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/health"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/metrics"
 	appmiddleware "github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/middleware"
@@ -38,7 +38,7 @@ type Server struct {
 	metricsListener net.Listener
 }
 
-func New(cfg config.Config, logger *slog.Logger, readiness *health.Readiness) *Server {
+func New(cfg config.Config, logger *slog.Logger, readiness *health.Readiness, authService *auth.Service, tokens *auth.TokenService) *Server {
 	gin.SetMode(ginMode(cfg.Environment))
 
 	engine := gin.New()
@@ -47,8 +47,7 @@ func New(cfg config.Config, logger *slog.Logger, readiness *health.Readiness) *S
 		appmiddleware.Logging(logger),
 		metrics.Middleware(),
 	)
-	engine.GET("/healthz", handlers.Healthz)
-	engine.GET("/readyz", readiness.Handler())
+	registerRoutes(engine, readiness, authService, tokens)
 
 	metricsMux := http.NewServeMux()
 	metricsMux.Handle("/metrics", metrics.Handler())

@@ -10,14 +10,22 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/auth"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/config"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/health"
+)
+
+const (
+	testAdminEmail    = "admin@test.local"
+	testAdminPassword = "test-admin-password"
 )
 
 // startTestServer binds both listeners on ephemeral (":0") ports, starts
 // serving in the background, and registers cleanup to shut the server down
 // — mirrors the build/start split ml-service's Python test suite uses for
-// the same reason: get the real bound port before issuing requests.
+// the same reason: get the real bound port before issuing requests. It
+// also seeds a known admin account so auth integration tests can exercise
+// RBAC over real HTTP requests rather than bypassing the API.
 func startTestServer(t *testing.T) *Server {
 	t.Helper()
 
@@ -33,7 +41,13 @@ func startTestServer(t *testing.T) *Server {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	readiness := health.NewReadiness()
 
-	server := New(cfg, logger, readiness)
+	tokens := auth.NewTokenService("test-secret", time.Hour)
+	authService := auth.NewService(auth.NewMemoryUserRepository(), tokens)
+	if err := authService.SeedAdmin(context.Background(), testAdminEmail, testAdminPassword); err != nil {
+		t.Fatalf("SeedAdmin() failed: %v", err)
+	}
+
+	server := New(cfg, logger, readiness, authService, tokens)
 	if err := server.Listen(); err != nil {
 		t.Fatalf("Listen() failed: %v", err)
 	}
@@ -142,5 +156,167 @@ func TestServer_RequestMetricsAreRecorded(t *testing.T) {
 	want := `gateway_http_requests_total{method="GET",route="/healthz",status="200"}`
 	if !strings.Contains(string(body), want) {
 		t.Errorf("metrics output missing counter for /healthz request; want substring %q, got:\n%s", want, body)
+	}
+}
+
+func postJSON(t *testing.T, url string, body any) *http.Response {
+	t.Helper()
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal request body: %v", err)
+	}
+	resp, err := http.Post(url, "application/json", strings.NewReader(string(raw)))
+	if err != nil {
+		t.Fatalf("POST %s failed: %v", url, err)
+	}
+	return resp
+}
+
+func getWithToken(t *testing.T, url, token string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET %s failed: %v", url, err)
+	}
+	return resp
+}
+
+func login(t *testing.T, baseURL, email, password string) string {
+	t.Helper()
+	resp := postJSON(t, baseURL+"/api/v1/auth/login", map[string]string{
+		"email":    email,
+		"password": password,
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("login status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	var body struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("invalid login response body: %v", err)
+	}
+	if body.AccessToken == "" {
+		t.Fatal("login response missing access_token")
+	}
+	return body.AccessToken
+}
+
+func TestAuth_RegisterLoginMeFlow(t *testing.T) {
+	server := startTestServer(t)
+	baseURL := "http://" + server.HTTPAddr()
+
+	registerResp := postJSON(t, baseURL+"/api/v1/auth/register", map[string]string{
+		"email":    "new-user@test.local",
+		"password": "correct-horse-battery",
+	})
+	defer registerResp.Body.Close()
+	if registerResp.StatusCode != http.StatusCreated {
+		t.Fatalf("register status = %d, want %d", registerResp.StatusCode, http.StatusCreated)
+	}
+	var registered struct {
+		ID    string `json:"id"`
+		Email string `json:"email"`
+		Role  string `json:"role"`
+	}
+	if err := json.NewDecoder(registerResp.Body).Decode(&registered); err != nil {
+		t.Fatalf("invalid register response: %v", err)
+	}
+	if registered.Role != "user" {
+		t.Errorf("registered role = %q, want %q (no self-service admin registration)", registered.Role, "user")
+	}
+
+	token := login(t, baseURL, "new-user@test.local", "correct-horse-battery")
+
+	meResp := getWithToken(t, baseURL+"/api/v1/me", token)
+	defer meResp.Body.Close()
+	if meResp.StatusCode != http.StatusOK {
+		t.Fatalf("/me status = %d, want %d", meResp.StatusCode, http.StatusOK)
+	}
+	var me struct {
+		ID    string `json:"id"`
+		Email string `json:"email"`
+		Role  string `json:"role"`
+	}
+	if err := json.NewDecoder(meResp.Body).Decode(&me); err != nil {
+		t.Fatalf("invalid /me response: %v", err)
+	}
+	if me.Email != "new-user@test.local" || me.ID != registered.ID {
+		t.Errorf("/me = %+v, want email/id matching registered user %+v", me, registered)
+	}
+}
+
+func TestAuth_DuplicateRegistrationIsRejected(t *testing.T) {
+	server := startTestServer(t)
+	baseURL := "http://" + server.HTTPAddr()
+
+	body := map[string]string{"email": "dupe@test.local", "password": "correct-horse-battery"}
+	first := postJSON(t, baseURL+"/api/v1/auth/register", body)
+	first.Body.Close()
+	if first.StatusCode != http.StatusCreated {
+		t.Fatalf("first register status = %d, want %d", first.StatusCode, http.StatusCreated)
+	}
+
+	second := postJSON(t, baseURL+"/api/v1/auth/register", body)
+	defer second.Body.Close()
+	if second.StatusCode != http.StatusConflict {
+		t.Errorf("second register status = %d, want %d", second.StatusCode, http.StatusConflict)
+	}
+}
+
+func TestAuth_LoginWithWrongPasswordIsRejected(t *testing.T) {
+	server := startTestServer(t)
+	baseURL := "http://" + server.HTTPAddr()
+
+	resp := postJSON(t, baseURL+"/api/v1/auth/login", map[string]string{
+		"email":    testAdminEmail,
+		"password": "not-the-right-password",
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
+	}
+}
+
+func TestAuth_MeWithoutTokenIsRejected(t *testing.T) {
+	server := startTestServer(t)
+
+	resp := getWithToken(t, "http://"+server.HTTPAddr()+"/api/v1/me", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
+	}
+}
+
+func TestAuth_AdminRouteRequiresAdminRole(t *testing.T) {
+	server := startTestServer(t)
+	baseURL := "http://" + server.HTTPAddr()
+
+	registerResp := postJSON(t, baseURL+"/api/v1/auth/register", map[string]string{
+		"email":    "regular-user@test.local",
+		"password": "correct-horse-battery",
+	})
+	registerResp.Body.Close()
+
+	userToken := login(t, baseURL, "regular-user@test.local", "correct-horse-battery")
+	userResp := getWithToken(t, baseURL+"/api/v1/admin/ping", userToken)
+	defer userResp.Body.Close()
+	if userResp.StatusCode != http.StatusForbidden {
+		t.Errorf("regular user /admin/ping status = %d, want %d", userResp.StatusCode, http.StatusForbidden)
+	}
+
+	adminToken := login(t, baseURL, testAdminEmail, testAdminPassword)
+	adminResp := getWithToken(t, baseURL+"/api/v1/admin/ping", adminToken)
+	defer adminResp.Body.Close()
+	if adminResp.StatusCode != http.StatusOK {
+		t.Errorf("admin /admin/ping status = %d, want %d", adminResp.StatusCode, http.StatusOK)
 	}
 }

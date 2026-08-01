@@ -6,12 +6,23 @@ streaming, caching (later phases) — never ML/NLP itself, which is
 `ml-service`'s job exclusively (see [`/docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md)
 for why the boundary is drawn this way).
 
-## Status (Phase 4)
+## Status (Phase 5)
 
-This is the service **skeleton**: HTTP server lifecycle (bind → serve →
-graceful shutdown), structured logging, liveness/readiness probes, and
-Prometheus metrics on a separate internal port. No business routes yet —
-those start arriving in Phase 5 (auth) and Phase 6 (ingestion).
+Phase 4 built the skeleton: HTTP server lifecycle (bind → serve → graceful
+shutdown), structured logging, liveness/readiness probes, Prometheus
+metrics on a separate internal port. Phase 5 adds the first real feature:
+JWT authentication and role-based access control.
+
+```
+POST /api/v1/auth/register   {email, password} -> 201 {id, email, role}   (always role "user")
+POST /api/v1/auth/login      {email, password} -> 200 {access_token, token_type, expires_in}
+GET  /api/v1/me               Bearer token      -> 200 {id, email, role}
+GET  /api/v1/admin/ping       Bearer token, admin role only -> 200 {message}
+```
+
+User storage is in-memory (`internal/auth.MemoryUserRepository`) — there is
+no Postgres connection wired up yet; see "Design decisions" below for why
+that's a deliberate, temporary stand-in rather than a gap.
 
 ## Setup
 
@@ -55,15 +66,16 @@ holds itself to.
 
 ```
 gateway-go/
-├── cmd/gateway/main.go       entrypoint: config → logger → server → signal handling
+├── cmd/gateway/main.go       entrypoint: config → logger → auth wiring → server → signal handling
 ├── internal/
 │   ├── config/                env-driven config (prefix GATEWAY_)
 │   ├── logging/                log/slog JSON setup
 │   ├── health/                 readiness-check registry (liveness lives in handlers)
-│   ├── handlers/                /healthz
+│   ├── auth/                   JWT issuance/validation, RBAC middleware, user repository + service
+│   ├── handlers/                /healthz, /api/v1/auth/*, /api/v1/me, /api/v1/admin/*
 │   ├── metrics/                 Prometheus middleware + /metrics handler
 │   ├── middleware/              structured request logging, panic recovery
-│   └── httpserver/              wires it all together; owns listener/server lifecycle
+│   └── httpserver/              wires it all together; owns listener/server lifecycle + routes
 └── go.mod                     its own module — see /go.work
 ```
 
@@ -79,11 +91,53 @@ internet can reach is a needless information leak this avoids for free.
 **Liveness and readiness are different endpoints for a reason.** `/healthz`
 never checks a downstream dependency — it only proves the process is up.
 `/readyz` (`internal/health.Readiness`) aggregates named checks that later
-phases register (Postgres in Phase 5, ml-service gRPC in Phase 6, Redis in
-Phase 13). Kubernetes treats a failed liveness probe as "restart the pod"
-and a failed readiness probe as "stop routing traffic here" — conflating
-them means a flaky downstream dependency causes restart loops on a process
-that was never actually broken.
+phases register (ml-service gRPC in Phase 6, Redis in Phase 13, Postgres
+once it replaces the in-memory user store). Kubernetes treats a failed
+liveness probe as "restart the pod" and a failed readiness probe as "stop
+routing traffic here" — conflating them means a flaky downstream dependency
+causes restart loops on a process that was never actually broken.
+
+**In-memory user storage, not Postgres, for now.** `auth.UserRepository` is
+an interface; `MemoryUserRepository` is one implementation, chosen because
+there's no database connection wired up yet (that lands with Docker Compose
+in Phase 16) and every layer above it — `Service`, the HTTP handlers, the
+middleware — is written against the interface, not the concrete store. A
+`PostgresUserRepository` slots in later without any of those layers
+changing, which is the actual point of the Repository pattern here: not
+"might swap databases someday" in the abstract, but a concrete swap already
+scheduled on the roadmap.
+
+**No self-service admin registration.** `Service.Register` always assigns
+`RoleUser`; the only admin account in this phase is seeded at startup from
+`GATEWAY_ADMIN_EMAIL`/`GATEWAY_ADMIN_PASSWORD`. Letting a request body
+choose its own role would make privilege escalation a one-line curl command
+— granting admin becomes an authenticated admin action once Phase 15's
+admin dashboard exists, not a public API parameter.
+
+**Stateless JWTs, not session lookups.** `Authenticate` verifies a token's
+signature and expiry only — it never re-queries the user repository per
+request. That means a token can't be instantly revoked before it expires;
+the mitigation is a short TTL (`GATEWAY_JWT_TTL`, default 1h), not a
+database round-trip on every authenticated request. Refresh-token rotation
+(to keep access-token TTLs short without forcing re-login every hour) is a
+deliberately deferred concern, not an oversight — it's real added
+complexity (rotation, revocation lists) that a skeleton auth phase doesn't
+need to prove the JWT/RBAC mechanics work.
+
+**HS256, not RS256.** `gateway-go` is both the only issuer and the only
+verifier of user-facing tokens — `ml-service` is never handed a raw JWT, it
+only sees requests gateway-go has already authenticated, over gRPC. A
+shared symmetric secret is the right amount of complexity for that
+topology; asymmetric signing (RS256, a private key for issuing and a public
+key any verifier can hold) would earn its keep the moment a second service
+needs to verify tokens independently without sharing the signing secret.
+
+**Same error for "no such user" and "wrong password."** `Service.Login`
+returns `ErrInvalidCredentials` in both cases (see `service.go` and
+`service_test.go`'s `..._SameErrorAsWrongPassword` test). Distinguishing
+them in the response would hand an attacker a free email-enumeration
+oracle — a security property specific enough that it's tested explicitly,
+not just implied by the code.
 
 **`Listen()` and `Serve()` are separate methods**, not one blocking call.
 `Listen` binds the TCP listeners (fast, synchronous) so the real bound port

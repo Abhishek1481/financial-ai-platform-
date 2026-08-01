@@ -35,7 +35,26 @@ type Config struct {
 	// Upper bound on how long graceful shutdown waits for in-flight
 	// requests to finish before the process exits anyway.
 	ShutdownTimeout time.Duration
+
+	// JWTSecret signs and verifies every access token (see
+	// internal/auth.TokenService). InsecureDefaultJWTSecret is only ever
+	// acceptable in development — Load rejects it in production.
+	JWTSecret string
+	JWTTTL    time.Duration
+
+	// AdminEmail/AdminPassword seed the one admin account this phase
+	// supports (see auth.Service.SeedAdmin) — there is no self-service
+	// path to becoming an admin. InsecureDefaultAdminPassword is rejected
+	// in production for the same reason as the JWT secret default.
+	AdminEmail    string
+	AdminPassword string
 }
+
+const (
+	InsecureDefaultJWTSecret     = "dev-insecure-secret-change-me"
+	InsecureDefaultAdminPassword = "dev-insecure-admin-change-me"
+	defaultAdminEmail            = "admin@example.com"
+)
 
 func Load() (Config, error) {
 	cfg := Config{
@@ -46,6 +65,10 @@ func Load() (Config, error) {
 		MetricsPort:     0,
 		LogLevel:        getEnv("GATEWAY_LOG_LEVEL", "info"),
 		ShutdownTimeout: 0,
+		JWTSecret:       getEnv("GATEWAY_JWT_SECRET", InsecureDefaultJWTSecret),
+		JWTTTL:          0,
+		AdminEmail:      getEnv("GATEWAY_ADMIN_EMAIL", defaultAdminEmail),
+		AdminPassword:   getEnv("GATEWAY_ADMIN_PASSWORD", InsecureDefaultAdminPassword),
 	}
 
 	var err error
@@ -57,6 +80,18 @@ func Load() (Config, error) {
 	}
 	if cfg.ShutdownTimeout, err = getEnvDuration("GATEWAY_SHUTDOWN_TIMEOUT", 10*time.Second); err != nil {
 		return Config{}, err
+	}
+	if cfg.JWTTTL, err = getEnvDuration("GATEWAY_JWT_TTL", time.Hour); err != nil {
+		return Config{}, err
+	}
+
+	if cfg.Environment == "production" {
+		if cfg.JWTSecret == InsecureDefaultJWTSecret {
+			return Config{}, fmt.Errorf("config: GATEWAY_JWT_SECRET must be set in production")
+		}
+		if cfg.AdminPassword == InsecureDefaultAdminPassword {
+			return Config{}, fmt.Errorf("config: GATEWAY_ADMIN_PASSWORD must be set in production")
+		}
 	}
 
 	return cfg, nil
