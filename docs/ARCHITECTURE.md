@@ -133,7 +133,26 @@ only through Go via gRPC.
 
 A RAG system without evaluation is a demo; one with a faithfulness/context-
 recall/hallucination harness and per-request latency and token-usage tracking
-is what makes this look like something a team actually operates. Both are
-built as core services (`ml-service/evaluation`, Prometheus/Grafana/OTel),
-not bolted on at the end — see [`docs/ROADMAP.md`](ROADMAP.md) for when each
-lands.
+is what makes this look like something a team actually operates. Both landed
+as core services, not bolted on at the end: `ml-service/app/evaluation/`
+(RAGAS-style lexical-overlap scoring — see
+[`docs/DESIGN_TRADEOFFS.md`](DESIGN_TRADEOFFS.md#6-observability-request-id-correlation-instead-of-full-opentelemetry)
+for why lexical overlap rather than an LLM judge) wired to a CI
+eval-regression gate, and Prometheus metrics on both services plus
+request-ID log correlation across the gRPC boundary (a deliberately
+scoped-down alternative to a full OpenTelemetry collector — same doc,
+same section, explains why). See [`docs/ROADMAP.md`](ROADMAP.md) for when
+each phase landed, and [`docs/DESIGN_TRADEOFFS.md`](DESIGN_TRADEOFFS.md)
+for the reasoning behind each one, condensed for an interview walkthrough.
+
+## See also
+
+- [`docs/SEQUENCE_DIAGRAMS.md`](SEQUENCE_DIAGRAMS.md) — the three core
+  flows (document ingestion, streaming RAG query, auth) end-to-end.
+- [`docs/openapi.yaml`](openapi.yaml) — the full REST API `gateway-go`
+  exposes.
+- [`docs/DEPLOYMENT.md`](DEPLOYMENT.md) — how to actually run this: local
+  processes, Docker Compose, or Kubernetes on AWS.
+- [`docs/DESIGN_TRADEOFFS.md`](DESIGN_TRADEOFFS.md) — the condensed,
+  interview-ready version of every major decision on this page and its
+  honest tradeoff.

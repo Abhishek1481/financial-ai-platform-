@@ -18,8 +18,13 @@ them together with a typed internal contract, and operates the result (auth,
 rate limiting, caching, observability, evaluation, CI/CD, and cloud deployment).
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full system design and
-the reasoning behind every major decision, and [`docs/ROADMAP.md`](docs/ROADMAP.md)
-for build status.
+the reasoning behind every major decision, [`docs/ROADMAP.md`](docs/ROADMAP.md)
+for build status, [`docs/SEQUENCE_DIAGRAMS.md`](docs/SEQUENCE_DIAGRAMS.md) for
+the three core flows end-to-end, [`docs/openapi.yaml`](docs/openapi.yaml) for
+the full REST API reference, [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) for how
+to actually run it (local, Docker Compose, or Kubernetes on AWS), and
+[`docs/DESIGN_TRADEOFFS.md`](docs/DESIGN_TRADEOFFS.md) for the condensed,
+interview-ready version of every major decision and its honest tradeoff.
 
 ## Why two languages
 
