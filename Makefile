@@ -15,6 +15,7 @@
 proto: proto-python proto-go
 
 proto-python:
+	mkdir -p proto/gen/python
 	python -m grpc_tools.protoc \
 		-I proto \
 		--python_out=proto/gen/python \
@@ -31,6 +32,7 @@ proto-python:
 # gateway-go — and scheduler/worker once they exist — can all depend on it
 # without duplicating codegen per service.
 proto-go:
+	mkdir -p proto/gen/go
 	python -m grpc_tools.protoc \
 		-I proto \
 		--go_out=proto/gen/go --go_opt=paths=source_relative \
