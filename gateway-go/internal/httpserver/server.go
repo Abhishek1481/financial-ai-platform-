@@ -10,10 +10,12 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/auth"
+	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/cache"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/config"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/conversation"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/evaluation"
@@ -22,6 +24,7 @@ import (
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/metrics"
 	appmiddleware "github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/middleware"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/rag"
+	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/ratelimit"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/search"
 )
 
@@ -31,14 +34,17 @@ import (
 // addition is a new field, not a breaking change to every existing call
 // site's argument order.
 type Dependencies struct {
-	Readiness     *health.Readiness
-	AuthService   *auth.Service
-	Tokens        *auth.TokenService
-	Ingestion     *ingestion.Service
-	Searcher      search.Searcher
-	Answerer      rag.Answerer
-	Conversations conversation.Store
-	Evaluator     evaluation.Evaluator
+	Readiness      *health.Readiness
+	AuthService    *auth.Service
+	Tokens         *auth.TokenService
+	Ingestion      *ingestion.Service
+	Searcher       search.Searcher
+	Answerer       rag.Answerer
+	Conversations  conversation.Store
+	Evaluator      evaluation.Evaluator
+	Cache          cache.Cache
+	SearchCacheTTL time.Duration
+	RateLimiter    *ratelimit.Limiter
 }
 
 // Server owns the public API listener and the internal metrics listener.

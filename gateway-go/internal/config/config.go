@@ -66,6 +66,24 @@ type Config struct {
 	// "concurrent document ingestion."
 	IngestionWorkers   int
 	IngestionQueueSize int
+
+	// SearchCacheTTL bounds how long an identical search query's result is
+	// served from internal/cache.Cache instead of re-querying ml-service.
+	// Zero disables caching (every request is a cache miss).
+	SearchCacheTTL time.Duration
+
+	// RateLimitRPS/RateLimitBurst configure internal/ratelimit.Limiter,
+	// applied per authenticated user (or per IP, pre-auth) across all of
+	// /api/v1.
+	RateLimitRPS   float64
+	RateLimitBurst int
+
+	// ConversationPruneInterval/ConversationMaxAge drive the background
+	// job (internal/scheduler) that garbage-collects abandoned
+	// conversation sessions from conversation.MemoryStore — see
+	// cmd/gateway/main.go.
+	ConversationPruneInterval time.Duration
+	ConversationMaxAge        time.Duration
 }
 
 const (
@@ -118,6 +136,22 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	if cfg.SearchCacheTTL, err = getEnvDuration("GATEWAY_SEARCH_CACHE_TTL", 30*time.Second); err != nil {
+		return Config{}, err
+	}
+	if cfg.RateLimitRPS, err = getEnvFloat("GATEWAY_RATE_LIMIT_RPS", 5); err != nil {
+		return Config{}, err
+	}
+	if cfg.RateLimitBurst, err = getEnvInt("GATEWAY_RATE_LIMIT_BURST", 10); err != nil {
+		return Config{}, err
+	}
+	if cfg.ConversationPruneInterval, err = getEnvDuration("GATEWAY_CONVERSATION_PRUNE_INTERVAL", 10*time.Minute); err != nil {
+		return Config{}, err
+	}
+	if cfg.ConversationMaxAge, err = getEnvDuration("GATEWAY_CONVERSATION_MAX_AGE", 24*time.Hour); err != nil {
+		return Config{}, err
+	}
+
 	if cfg.Environment == "production" {
 		if cfg.JWTSecret == InsecureDefaultJWTSecret {
 			return Config{}, fmt.Errorf("config: GATEWAY_JWT_SECRET must be set in production")
@@ -147,6 +181,18 @@ func getEnvInt(key string, fallback int) (int, error) {
 		return 0, fmt.Errorf("config: %s=%q is not a valid integer: %w", key, v, err)
 	}
 	return n, nil
+}
+
+func getEnvFloat(key string, fallback float64) (float64, error) {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return fallback, nil
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return 0, fmt.Errorf("config: %s=%q is not a valid number: %w", key, v, err)
+	}
+	return f, nil
 }
 
 func getEnvDuration(key string, fallback time.Duration) (time.Duration, error) {

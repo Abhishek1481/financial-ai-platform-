@@ -3,6 +3,7 @@ package conversation
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 func TestMemoryStore_HistoryOnUnknownSessionIsEmpty(t *testing.T) {
@@ -80,5 +81,37 @@ func TestMemoryStore_CapsHistoryAtMaxTurnsPerSession(t *testing.T) {
 	history, _ := store.History(ctx, "session-1")
 	if len(history) != maxTurnsPerSession {
 		t.Errorf("history length = %d, want %d", len(history), maxTurnsPerSession)
+	}
+}
+
+func TestMemoryStore_PruneOlderThanRemovesStaleSessionsOnly(t *testing.T) {
+	store := NewMemoryStore()
+	ctx := context.Background()
+
+	_ = store.AppendTurns(ctx, "stale-session", Turn{Role: RoleUser, Content: "old"})
+	time.Sleep(5 * time.Millisecond) // guarantee a distinguishable timestamp regardless of clock resolution
+	cutoff := time.Now()
+	time.Sleep(5 * time.Millisecond)
+	_ = store.AppendTurns(ctx, "fresh-session", Turn{Role: RoleUser, Content: "new"})
+
+	pruned := store.PruneOlderThan(cutoff)
+	if pruned != 1 {
+		t.Fatalf("pruned = %d, want 1", pruned)
+	}
+
+	staleHistory, _ := store.History(ctx, "stale-session")
+	if len(staleHistory) != 0 {
+		t.Errorf("stale-session history = %+v, want empty after pruning", staleHistory)
+	}
+	freshHistory, _ := store.History(ctx, "fresh-session")
+	if len(freshHistory) != 1 {
+		t.Errorf("fresh-session history = %+v, want 1 turn (should survive pruning)", freshHistory)
+	}
+}
+
+func TestMemoryStore_PruneOlderThanOnEmptyStoreIsANoop(t *testing.T) {
+	store := NewMemoryStore()
+	if pruned := store.PruneOlderThan(time.Now()); pruned != 0 {
+		t.Errorf("pruned = %d, want 0", pruned)
 	}
 }

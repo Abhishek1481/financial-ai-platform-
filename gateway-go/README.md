@@ -6,7 +6,7 @@ streaming, caching (later phases) — never ML/NLP itself, which is
 `ml-service`'s job exclusively (see [`/docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md)
 for why the boundary is drawn this way).
 
-## Status (Phase 12)
+## Status (Phase 13)
 
 Phase 4 built the skeleton (HTTP lifecycle, logging, health/metrics).
 Phase 5 added JWT auth and RBAC. Phase 6 added document ingestion: upload,
@@ -42,7 +42,16 @@ prefer to manage their own transcript. Phase 12 adds
 interface — the same thin-wrapper pattern as `search.Searcher`/`rag.Answerer`.
 `EvaluationService.BatchEvaluate` (client-streaming, for CI eval-regression
 gates) has no gateway-go caller — it's driven directly over gRPC by the CI
-pipeline landing in Phase 19, not something an HTTP client calls.
+pipeline landing in Phase 19, not something an HTTP client calls. Phase 13
+adds three cross-cutting pieces: `internal/cache.Cache` (in-memory, TTL-based)
+caches `GET /api/v1/search` results; `internal/ratelimit.Limiter`
+(token-bucket, per client IP) gates all of `/api/v1`, returning 429 once a
+caller's burst is exhausted; `internal/scheduler.Run` drives a background job
+that prunes abandoned `conversation.MemoryStore` sessions
+(`GATEWAY_CONVERSATION_MAX_AGE`, default 24h) so a long-running process
+doesn't leak memory for sessions no one returns to. All three are
+in-memory/local, same "temporary but real" tradeoff as the repositories
+above — Redis lands in Phase 16.
 
 ```
 POST /api/v1/auth/register   {email, password} -> 201 {id, email, role}   (always role "user")
@@ -141,6 +150,9 @@ gateway-go/
 │   ├── rag/                       Answerer interface over RAGService (streaming)
 │   ├── conversation/               session_id-keyed conversation memory (in-memory Store)
 │   ├── evaluation/                 Evaluator interface over EvaluationService
+│   ├── cache/                       in-memory TTL cache (GET /api/v1/search)
+│   ├── ratelimit/                   per-client token-bucket rate limiter
+│   ├── scheduler/                   generic "run this every N minutes" background job
 │   ├── handlers/                /healthz, /api/v1/auth/*, /api/v1/me, /api/v1/admin/*, /api/v1/documents*, /api/v1/search, /api/v1/rag/query
 │   ├── metrics/                 Prometheus middleware + /metrics handler
 │   ├── middleware/              structured request logging, panic recovery

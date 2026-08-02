@@ -17,11 +17,19 @@ func registerRoutes(engine *gin.Engine, deps Dependencies, maxUploadBytes int64)
 	authMW := auth.NewMiddleware(deps.Tokens)
 	authHandlers := handlers.NewAuthHandlers(deps.AuthService)
 	documentHandlers := handlers.NewDocumentHandlers(deps.Ingestion, maxUploadBytes)
-	searchHandlers := handlers.NewSearchHandlers(deps.Searcher)
+	searchHandlers := handlers.NewSearchHandlers(deps.Searcher, deps.Cache, deps.SearchCacheTTL)
 	ragHandlers := handlers.NewRAGHandlers(deps.Answerer, deps.Conversations)
 	adminHandlers := handlers.NewAdminHandlers(deps.Evaluator)
 
 	v1 := engine.Group("/api/v1")
+	// Rate limiting runs as the first middleware on every /api/v1 route,
+	// ahead of any route's Authenticate() — which means authenticated
+	// claims aren't available yet to key on here even on routes that
+	// require them. Keying by remote IP instead is simpler and still
+	// correct for the actual goal (stop one caller from hammering the
+	// API), and sidesteps having to special-case rate-limit ordering
+	// per-route the way Authenticate/RequireRole already are.
+	v1.Use(deps.RateLimiter.Middleware(func(c *gin.Context) string { return c.ClientIP() }))
 
 	authGroup := v1.Group("/auth")
 	authGroup.POST("/register", authHandlers.Register)

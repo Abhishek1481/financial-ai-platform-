@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/auth"
+	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/cache"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/config"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/conversation"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/health"
@@ -20,6 +21,8 @@ import (
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/ingestion"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/logging"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/mlclient"
+	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/ratelimit"
+	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/scheduler"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/storage"
 )
 
@@ -87,15 +90,28 @@ func main() {
 	defer cancelWorkers()
 	ingestionService.Start(workerCtx)
 
+	conversations := conversation.NewMemoryStore()
+	// Garbage-collects sessions nobody has returned to — without this, an
+	// abandoned session sits in memory for the life of the process (see
+	// conversation.MemoryStore.PruneOlderThan's doc comment).
+	go scheduler.Run(workerCtx, cfg.ConversationPruneInterval, func(ctx context.Context) {
+		if pruned := conversations.PruneOlderThan(time.Now().Add(-cfg.ConversationMaxAge)); pruned > 0 {
+			logger.Info("pruned stale conversation sessions", "count", pruned)
+		}
+	})
+
 	server := httpserver.New(cfg, logger, httpserver.Dependencies{
-		Readiness:     readiness,
-		AuthService:   authService,
-		Tokens:        tokens,
-		Ingestion:     ingestionService,
-		Searcher:      mlClient,
-		Answerer:      mlClient,
-		Conversations: conversation.NewMemoryStore(),
-		Evaluator:     mlClient,
+		Readiness:      readiness,
+		AuthService:    authService,
+		Tokens:         tokens,
+		Ingestion:      ingestionService,
+		Searcher:       mlClient,
+		Answerer:       mlClient,
+		Conversations:  conversations,
+		Evaluator:      mlClient,
+		Cache:          cache.NewMemoryCache(),
+		SearchCacheTTL: cfg.SearchCacheTTL,
+		RateLimiter:    ratelimit.New(cfg.RateLimitRPS, cfg.RateLimitBurst),
 	})
 	if err := server.Listen(); err != nil {
 		logger.Error("failed to bind listeners", "error", err)

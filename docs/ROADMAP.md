@@ -31,7 +31,7 @@ it's clear what's real vs. planned at any point in time.
       conversation memory.
 - [x] **Phase 12 — Model evaluation.** Precision/recall, faithfulness,
       context recall, hallucination detection, latency/token tracking.
-- [ ] **Phase 13 — Caching, rate limiting, scheduler.** Redis cache, rate
+- [x] **Phase 13 — Caching, rate limiting, scheduler.** Redis cache, rate
       limiter, job scheduler, worker pool in Go.
 - [ ] **Phase 14 — Monitoring.** Prometheus metrics across all services,
       Grafana dashboards, OpenTelemetry tracing/logging.

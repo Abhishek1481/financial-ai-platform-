@@ -23,6 +23,7 @@ import (
 	searchv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/search/v1"
 
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/auth"
+	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/cache"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/config"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/conversation"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/evaluation"
@@ -30,6 +31,7 @@ import (
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/ingestion"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/mlclient"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/rag"
+	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/ratelimit"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/search"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/storage"
 )
@@ -195,7 +197,7 @@ func startTestServerWithMLDeps(
 	answerer rag.Answerer,
 ) *Server {
 	t.Helper()
-	return startTestServerFull(t, extractor, embedder, searcher, answerer, &fakeEvaluator{})
+	return startTestServerFull(t, extractor, embedder, searcher, answerer, &fakeEvaluator{}, unlimitedRateLimiter())
 }
 
 // startTestServerWithEvaluator is startTestServerWithMLDeps's counterpart
@@ -203,7 +205,27 @@ func startTestServerWithMLDeps(
 // everything else gets the same default fakes as startTestServer.
 func startTestServerWithEvaluator(t *testing.T, evaluator evaluation.Evaluator) *Server {
 	t.Helper()
-	return startTestServerFull(t, &fakeExtractor{}, &fakeEmbedder{}, &fakeSearcher{}, &fakeAnswerer{}, evaluator)
+	return startTestServerFull(
+		t, &fakeExtractor{}, &fakeEmbedder{}, &fakeSearcher{}, &fakeAnswerer{}, evaluator, unlimitedRateLimiter(),
+	)
+}
+
+// startTestServerWithRateLimit is startTestServerWithMLDeps's counterpart
+// for tests that need to actually observe rate limiting kick in —
+// everything else gets the same default fakes as startTestServer.
+func startTestServerWithRateLimit(t *testing.T, limiter *ratelimit.Limiter) *Server {
+	t.Helper()
+	return startTestServerFull(
+		t, &fakeExtractor{}, &fakeEmbedder{}, &fakeSearcher{}, &fakeAnswerer{}, &fakeEvaluator{}, limiter,
+	)
+}
+
+// unlimitedRateLimiter is what every test except the rate-limiting tests
+// themselves wants — high enough that a test's handful of requests never
+// trips it, so rate limiting doesn't have to be a concern in tests that
+// aren't about rate limiting.
+func unlimitedRateLimiter() *ratelimit.Limiter {
+	return ratelimit.New(1000, 1000)
 }
 
 func startTestServerFull(
@@ -213,6 +235,7 @@ func startTestServerFull(
 	searcher search.Searcher,
 	answerer rag.Answerer,
 	evaluator evaluation.Evaluator,
+	rateLimiter *ratelimit.Limiter,
 ) *Server {
 	t.Helper()
 
@@ -253,14 +276,17 @@ func startTestServerFull(
 	t.Cleanup(cancelWorkers)
 
 	server := New(cfg, logger, Dependencies{
-		Readiness:     readiness,
-		AuthService:   authService,
-		Tokens:        tokens,
-		Ingestion:     ingestionService,
-		Searcher:      searcher,
-		Answerer:      answerer,
-		Conversations: conversation.NewMemoryStore(),
-		Evaluator:     evaluator,
+		Readiness:      readiness,
+		AuthService:    authService,
+		Tokens:         tokens,
+		Ingestion:      ingestionService,
+		Searcher:       searcher,
+		Answerer:       answerer,
+		Conversations:  conversation.NewMemoryStore(),
+		Evaluator:      evaluator,
+		Cache:          cache.NewMemoryCache(),
+		SearchCacheTTL: time.Minute,
+		RateLimiter:    rateLimiter,
 	})
 	if err := server.Listen(); err != nil {
 		t.Fatalf("Listen() failed: %v", err)
@@ -1306,6 +1332,102 @@ func TestAdminEvaluate_ReturnsScoresFromEvaluator(t *testing.T) {
 	}
 	if body.Faithfulness != 1.0 || body.ContextPrecision != 0.5 || body.AnswerRelevancy != 0.8 {
 		t.Errorf("unexpected body: %+v", body)
+	}
+}
+
+func TestRateLimit_ExceedingBurstReturns429(t *testing.T) {
+	server := startTestServerWithRateLimit(t, ratelimit.New(0, 2)) // 0 refill isolates this to burst
+	baseURL := "http://" + server.HTTPAddr()
+
+	// /healthz sits outside the /api/v1 group the rate limiter is
+	// registered on, so this hits a route under /api/v1 instead —
+	// /me without a token still reaches the limiter before Authenticate
+	// rejects it, since the limiter is v1-group middleware and runs first.
+	var lastStatus int
+	for i := 0; i < 3; i++ {
+		resp := getWithToken(t, baseURL+"/api/v1/me", "")
+		lastStatus = resp.StatusCode
+		resp.Body.Close()
+	}
+
+	if lastStatus != http.StatusTooManyRequests {
+		t.Errorf("status after exhausting burst = %d, want %d", lastStatus, http.StatusTooManyRequests)
+	}
+}
+
+func TestRateLimit_DifferentClientsHaveIndependentBudgets(t *testing.T) {
+	// The limiter itself is keyed by remote IP (see routes.go's comment on
+	// why, not user ID) — this test just confirms a request that exhausts
+	// one key's budget doesn't affect requests answered under a different
+	// key, using the Limiter directly since httptest can't easily vary
+	// RemoteAddr through gin's real network listener.
+	limiter := ratelimit.New(0, 1)
+	if !limiter.Allow("client-a") {
+		t.Fatal("client-a's first request should be allowed")
+	}
+	if !limiter.Allow("client-b") {
+		t.Fatal("client-b should have an independent budget from client-a")
+	}
+}
+
+func TestSearch_CachesIdenticalQueries(t *testing.T) {
+	var calls int
+	searcher := &fakeSearcher{
+		respFn: func(query string) (*searchv1.SearchResponse, error) {
+			calls++
+			return &searchv1.SearchResponse{
+				Results: []*searchv1.ScoredChunk{
+					{Chunk: &commonv1.Chunk{ChunkId: "c1", DocumentId: "d1", Text: "result"}, Score: 0.5},
+				},
+			}, nil
+		},
+	}
+	server := startTestServerWithMLDeps(t, &fakeExtractor{}, &fakeEmbedder{}, searcher, &fakeAnswerer{})
+	baseURL := "http://" + server.HTTPAddr()
+
+	registerResp := postJSON(t, baseURL+"/api/v1/auth/register", map[string]string{
+		"email":    "cache1@test.local",
+		"password": "correct-horse-battery",
+	})
+	registerResp.Body.Close()
+	token := login(t, baseURL, "cache1@test.local", "correct-horse-battery")
+
+	url := baseURL + "/api/v1/search?q=tesla&mode=hybrid&top_k=5"
+	resp1 := getWithToken(t, url, token)
+	resp1.Body.Close()
+	resp2 := getWithToken(t, url, token)
+	resp2.Body.Close()
+
+	if calls != 1 {
+		t.Errorf("searcher called %d times for two identical queries, want 1 (second should be a cache hit)", calls)
+	}
+}
+
+func TestSearch_DoesNotCacheAcrossDifferentQueries(t *testing.T) {
+	var calls int
+	searcher := &fakeSearcher{
+		respFn: func(query string) (*searchv1.SearchResponse, error) {
+			calls++
+			return &searchv1.SearchResponse{Results: nil}, nil
+		},
+	}
+	server := startTestServerWithMLDeps(t, &fakeExtractor{}, &fakeEmbedder{}, searcher, &fakeAnswerer{})
+	baseURL := "http://" + server.HTTPAddr()
+
+	registerResp := postJSON(t, baseURL+"/api/v1/auth/register", map[string]string{
+		"email":    "cache2@test.local",
+		"password": "correct-horse-battery",
+	})
+	registerResp.Body.Close()
+	token := login(t, baseURL, "cache2@test.local", "correct-horse-battery")
+
+	resp1 := getWithToken(t, baseURL+"/api/v1/search?q=tesla&mode=hybrid", token)
+	resp1.Body.Close()
+	resp2 := getWithToken(t, baseURL+"/api/v1/search?q=apple&mode=hybrid", token)
+	resp2.Body.Close()
+
+	if calls != 2 {
+		t.Errorf("searcher called %d times for two different queries, want 2 (no cross-query cache hit)", calls)
 	}
 }
 

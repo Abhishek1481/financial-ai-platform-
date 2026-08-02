@@ -1,25 +1,34 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
 	commonv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/common/v1"
 	searchv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/search/v1"
 
+	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/cache"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/search"
 )
 
 type SearchHandlers struct {
 	searcher search.Searcher
+	cache    cache.Cache
+	cacheTTL time.Duration
 }
 
-func NewSearchHandlers(searcher search.Searcher) *SearchHandlers {
-	return &SearchHandlers{searcher: searcher}
+// NewSearchHandlers's cacheTTL of 0 disables caching (every lookup is a
+// miss) — a valid configuration (config.Config.SearchCacheTTL defaults to
+// nonzero, but a test or a deployment that wants always-fresh results can
+// set it to 0 without a separate on/off flag).
+func NewSearchHandlers(searcher search.Searcher, c cache.Cache, cacheTTL time.Duration) *SearchHandlers {
+	return &SearchHandlers{searcher: searcher, cache: c, cacheTTL: cacheTTL}
 }
 
 const defaultSearchTopK = 10
@@ -65,7 +74,16 @@ func (h *SearchHandlers) Search(c *gin.Context) {
 		return
 	}
 
-	filter := buildMetadataFilter(c.Query("tickers"), c.Query("filing_types"), c.Query("fiscal_period"))
+	tickersCSV := c.Query("tickers")
+	filingTypesCSV := c.Query("filing_types")
+	fiscalPeriod := c.Query("fiscal_period")
+	filter := buildMetadataFilter(tickersCSV, filingTypesCSV, fiscalPeriod)
+
+	cacheKey := fmt.Sprintf("search:%s|%s|%d|%s|%s|%s", query, mode, topK, tickersCSV, filingTypesCSV, fiscalPeriod)
+	if cached, ok := h.cache.Get(cacheKey); ok {
+		c.Data(http.StatusOK, "application/json; charset=utf-8", []byte(cached))
+		return
+	}
 
 	resp, err := h.searcher.Search(c.Request.Context(), query, topK, mode, filter)
 	if err != nil {
@@ -85,10 +103,19 @@ func (h *SearchHandlers) Search(c *gin.Context) {
 		})
 	}
 
-	c.JSON(http.StatusOK, searchResponseView{
+	view := searchResponseView{
 		Results:         results,
 		SearchLatencyMs: float64(resp.GetSearchLatencyMs()),
-	})
+	}
+	// Caching is best-effort: a marshal failure here (which shouldn't
+	// happen for this struct) just means the next identical query is a
+	// cache miss too, not a request failure — the response the client
+	// already has is unaffected either way.
+	if raw, err := json.Marshal(view); err == nil {
+		h.cache.Set(cacheKey, string(raw), h.cacheTTL)
+	}
+
+	c.JSON(http.StatusOK, view)
 }
 
 func parseSearchMode(raw string) (searchv1.SearchMode, error) {
