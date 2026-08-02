@@ -14,6 +14,7 @@ import (
 
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/auth"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/config"
+	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/conversation"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/health"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/httpserver"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/ingestion"
@@ -87,12 +88,13 @@ func main() {
 	ingestionService.Start(workerCtx)
 
 	server := httpserver.New(cfg, logger, httpserver.Dependencies{
-		Readiness:   readiness,
-		AuthService: authService,
-		Tokens:      tokens,
-		Ingestion:   ingestionService,
-		Searcher:    mlClient,
-		Answerer:    mlClient,
+		Readiness:     readiness,
+		AuthService:   authService,
+		Tokens:        tokens,
+		Ingestion:     ingestionService,
+		Searcher:      mlClient,
+		Answerer:      mlClient,
+		Conversations: conversation.NewMemoryStore(),
 	})
 	if err := server.Listen(); err != nil {
 		logger.Error("failed to bind listeners", "error", err)

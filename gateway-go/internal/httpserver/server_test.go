@@ -23,6 +23,7 @@ import (
 
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/auth"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/config"
+	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/conversation"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/health"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/ingestion"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/mlclient"
@@ -210,12 +211,13 @@ func startTestServerWithMLDeps(
 	t.Cleanup(cancelWorkers)
 
 	server := New(cfg, logger, Dependencies{
-		Readiness:   readiness,
-		AuthService: authService,
-		Tokens:      tokens,
-		Ingestion:   ingestionService,
-		Searcher:    searcher,
-		Answerer:    answerer,
+		Readiness:     readiness,
+		AuthService:   authService,
+		Tokens:        tokens,
+		Ingestion:     ingestionService,
+		Searcher:      searcher,
+		Answerer:      answerer,
+		Conversations: conversation.NewMemoryStore(),
 	})
 	if err := server.Listen(); err != nil {
 		t.Fatalf("Listen() failed: %v", err)
@@ -1075,4 +1077,125 @@ func TestSummarize_ReturnsSummaryFromAnswerer(t *testing.T) {
 	if body.Usage.TotalTokens != 60 {
 		t.Errorf("total_tokens = %d, want 60", body.Usage.TotalTokens)
 	}
+}
+
+func TestRAGQuery_ConversationMemoryPersistsAcrossTurns(t *testing.T) {
+	var capturedHistories [][]*commonv1.ConversationTurn
+	answerer := &fakeAnswerer{
+		respFn: func(req *ragv1.QueryRequest) []mlclient.QueryEvent {
+			capturedHistories = append(capturedHistories, req.GetHistory())
+			return []mlclient.QueryEvent{
+				{Token: "answer"},
+				{Final: &ragv1.QueryFinal{
+					Usage: &commonv1.TokenUsage{PromptTokens: 1, CompletionTokens: 1, TotalTokens: 2},
+				}},
+			}
+		},
+	}
+	server := startTestServerWithMLDeps(t, &fakeExtractor{}, &fakeEmbedder{}, &fakeSearcher{}, answerer)
+	baseURL := "http://" + server.HTTPAddr()
+
+	registerResp := postJSON(t, baseURL+"/api/v1/auth/register", map[string]string{
+		"email":    "convo1@test.local",
+		"password": "correct-horse-battery",
+	})
+	registerResp.Body.Close()
+	token := login(t, baseURL, "convo1@test.local", "correct-horse-battery")
+
+	resp1 := postJSONWithToken(t, baseURL+"/api/v1/rag/query", token, map[string]string{
+		"question": "What did revenue do?",
+	})
+	body1, err := io.ReadAll(resp1.Body)
+	resp1.Body.Close()
+	if err != nil {
+		t.Fatalf("read first response: %v", err)
+	}
+	sessionID := extractSessionID(t, string(body1))
+	if sessionID == "" {
+		t.Fatalf("no session_id in first response:\n%s", body1)
+	}
+
+	resp2 := postJSONWithToken(t, baseURL+"/api/v1/rag/query", token, map[string]string{
+		"question":   "And risks?",
+		"session_id": sessionID,
+	})
+	if _, err := io.ReadAll(resp2.Body); err != nil {
+		t.Fatalf("read second response: %v", err)
+	}
+	resp2.Body.Close()
+
+	if len(capturedHistories) != 2 {
+		t.Fatalf("answerer called %d times, want 2", len(capturedHistories))
+	}
+	if len(capturedHistories[0]) != 0 {
+		t.Errorf("first call history = %v, want empty (new session)", capturedHistories[0])
+	}
+	if len(capturedHistories[1]) != 2 {
+		t.Fatalf("second call history = %v, want 2 turns from the first exchange", capturedHistories[1])
+	}
+	if capturedHistories[1][0].GetContent() != "What did revenue do?" {
+		t.Errorf("history[0].content = %q", capturedHistories[1][0].GetContent())
+	}
+	if capturedHistories[1][0].GetRole() != commonv1.ConversationRole_CONVERSATION_ROLE_USER {
+		t.Errorf("history[0].role = %v, want USER", capturedHistories[1][0].GetRole())
+	}
+	if capturedHistories[1][1].GetContent() != "answer" {
+		t.Errorf("history[1].content = %q", capturedHistories[1][1].GetContent())
+	}
+	if capturedHistories[1][1].GetRole() != commonv1.ConversationRole_CONVERSATION_ROLE_ASSISTANT {
+		t.Errorf("history[1].role = %v, want ASSISTANT", capturedHistories[1][1].GetRole())
+	}
+}
+
+func TestRAGQuery_ExplicitHistoryOverridesStoredSession(t *testing.T) {
+	var capturedHistories [][]*commonv1.ConversationTurn
+	answerer := &fakeAnswerer{
+		respFn: func(req *ragv1.QueryRequest) []mlclient.QueryEvent {
+			capturedHistories = append(capturedHistories, req.GetHistory())
+			return []mlclient.QueryEvent{
+				{Final: &ragv1.QueryFinal{Usage: &commonv1.TokenUsage{}}},
+			}
+		},
+	}
+	server := startTestServerWithMLDeps(t, &fakeExtractor{}, &fakeEmbedder{}, &fakeSearcher{}, answerer)
+	baseURL := "http://" + server.HTTPAddr()
+
+	registerResp := postJSON(t, baseURL+"/api/v1/auth/register", map[string]string{
+		"email":    "convo2@test.local",
+		"password": "correct-horse-battery",
+	})
+	registerResp.Body.Close()
+	token := login(t, baseURL, "convo2@test.local", "correct-horse-battery")
+
+	resp := postJSONWithToken(t, baseURL+"/api/v1/rag/query", token, map[string]any{
+		"question":   "Follow-up?",
+		"session_id": "irrelevant-session",
+		"history":    []map[string]string{{"role": "user", "content": "explicit turn"}},
+	})
+	if _, err := io.ReadAll(resp.Body); err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	resp.Body.Close()
+
+	if len(capturedHistories) != 1 || len(capturedHistories[0]) != 1 {
+		t.Fatalf("captured histories = %+v", capturedHistories)
+	}
+	if capturedHistories[0][0].GetContent() != "explicit turn" {
+		t.Errorf("history[0].content = %q, want explicit body history to win", capturedHistories[0][0].GetContent())
+	}
+}
+
+func extractSessionID(t *testing.T, sseBody string) string {
+	t.Helper()
+	const marker = `"session_id":"`
+	idx := strings.Index(sseBody, marker)
+	if idx == -1 {
+		return ""
+	}
+	rest := sseBody[idx+len(marker):]
+	end := strings.Index(rest, `"`)
+	if end == -1 {
+		return ""
+	}
+	return rest[:end]
 }

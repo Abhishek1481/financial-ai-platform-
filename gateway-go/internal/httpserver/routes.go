@@ -18,7 +18,7 @@ func registerRoutes(engine *gin.Engine, deps Dependencies, maxUploadBytes int64)
 	authHandlers := handlers.NewAuthHandlers(deps.AuthService)
 	documentHandlers := handlers.NewDocumentHandlers(deps.Ingestion, maxUploadBytes)
 	searchHandlers := handlers.NewSearchHandlers(deps.Searcher)
-	ragHandlers := handlers.NewRAGHandlers(deps.Answerer)
+	ragHandlers := handlers.NewRAGHandlers(deps.Answerer, deps.Conversations)
 
 	v1 := engine.Group("/api/v1")
 

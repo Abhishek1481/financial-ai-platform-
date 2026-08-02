@@ -27,7 +27,7 @@ it's clear what's real vs. planned at any point in time.
       call, citation extraction, streaming responses.
 - [x] **Phase 10 — Financial summarization.** Executive/risk/revenue/
       sentiment summaries.
-- [ ] **Phase 11 — Conversational QA.** Context-aware follow-up questions,
+- [x] **Phase 11 — Conversational QA.** Context-aware follow-up questions,
       conversation memory.
 - [ ] **Phase 12 — Model evaluation.** Precision/recall, faithfulness,
       context recall, hallucination detection, latency/token tracking.

@@ -6,7 +6,7 @@ streaming, caching (later phases) — never ML/NLP itself, which is
 `ml-service`'s job exclusively (see [`/docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md)
 for why the boundary is drawn this way).
 
-## Status (Phase 10)
+## Status (Phase 11)
 
 Phase 4 built the skeleton (HTTP lifecycle, logging, health/metrics).
 Phase 5 added JWT auth and RBAC. Phase 6 added document ingestion: upload,
@@ -28,6 +28,15 @@ than draining the whole answer first the way `ChunkAndEmbed` does. Phase
 `RAGService.Summarize` — no streaming here, since a summary has no
 "watch it stream" requirement; `ml-service` returning `NOT_FOUND` for an
 unknown document maps onto a 404 via `google.golang.org/grpc/status`.
+Phase 11 adds server-side conversation memory to `POST /api/v1/rag/query`:
+`internal/conversation.Store` (same in-memory-for-now Repository pattern
+as `auth.UserRepository`) is keyed by `session_id` — an omitted one is
+minted here and returned in the `final` SSE event, prior turns are loaded
+automatically so a caller doesn't have to resend the whole transcript on
+every follow-up, and the question/answer are appended back once the
+answer finishes. Explicitly supplying `history` in the request body still
+overrides this (the stateless mode Phase 9 shipped), for callers that
+prefer to manage their own transcript.
 
 ```
 POST /api/v1/auth/register   {email, password} -> 201 {id, email, role}   (always role "user")
@@ -50,7 +59,10 @@ GET  /api/v1/search           Bearer token, ?q=...&mode=semantic|keyword|hybrid&
 POST /api/v1/rag/query        Bearer token, body: {question, session_id?, history?, top_k?,
                                tickers?, filing_types?, fiscal_period?}
                                -> 200 text/event-stream: "token" events {token}, then one "final"
-                               event {citations, usage, latency_ms}, or an "error" event
+                               event {session_id, citations, usage, latency_ms}, or an "error" event
+                               (session_id omitted in the request is server-generated and returned
+                               in "final" for reuse; conversation history is remembered server-side
+                               per session unless "history" is explicitly supplied)
 ```
 
 User storage is in-memory (`internal/auth.MemoryUserRepository`); so are
@@ -118,6 +130,7 @@ gateway-go/
 │   ├── ingestion/                 document/job domain: dedup, Upload, worker-pool wiring
 │   ├── search/                   Searcher interface over SearchService
 │   ├── rag/                       Answerer interface over RAGService (streaming)
+│   ├── conversation/               session_id-keyed conversation memory (in-memory Store)
 │   ├── handlers/                /healthz, /api/v1/auth/*, /api/v1/me, /api/v1/admin/*, /api/v1/documents*, /api/v1/search, /api/v1/rag/query
 │   ├── metrics/                 Prometheus middleware + /metrics handler
 │   ├── middleware/              structured request logging, panic recovery

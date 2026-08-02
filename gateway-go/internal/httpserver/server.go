@@ -15,6 +15,7 @@ import (
 
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/auth"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/config"
+	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/conversation"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/health"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/ingestion"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/metrics"
@@ -29,12 +30,13 @@ import (
 // addition is a new field, not a breaking change to every existing call
 // site's argument order.
 type Dependencies struct {
-	Readiness   *health.Readiness
-	AuthService *auth.Service
-	Tokens      *auth.TokenService
-	Ingestion   *ingestion.Service
-	Searcher    search.Searcher
-	Answerer    rag.Answerer
+	Readiness     *health.Readiness
+	AuthService   *auth.Service
+	Tokens        *auth.TokenService
+	Ingestion     *ingestion.Service
+	Searcher      search.Searcher
+	Answerer      rag.Answerer
+	Conversations conversation.Store
 }
 
 // Server owns the public API listener and the internal metrics listener.

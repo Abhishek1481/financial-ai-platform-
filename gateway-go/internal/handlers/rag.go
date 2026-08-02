@@ -1,26 +1,32 @@
 package handlers
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	commonv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/common/v1"
 	ragv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/rag/v1"
 
+	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/conversation"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/rag"
 )
 
 type RAGHandlers struct {
-	answerer rag.Answerer
+	answerer      rag.Answerer
+	conversations conversation.Store
 }
 
-func NewRAGHandlers(answerer rag.Answerer) *RAGHandlers {
-	return &RAGHandlers{answerer: answerer}
+func NewRAGHandlers(answerer rag.Answerer, conversations conversation.Store) *RAGHandlers {
+	return &RAGHandlers{answerer: answerer, conversations: conversations}
 }
 
 type conversationTurnBody struct {
@@ -53,6 +59,7 @@ type tokenUsageView struct {
 }
 
 type queryFinalView struct {
+	SessionID string         `json:"session_id"`
 	Citations []citationView `json:"citations"`
 	Usage     tokenUsageView `json:"usage"`
 	LatencyMs float64        `json:"latency_ms"`
@@ -64,8 +71,18 @@ type queryFinalView struct {
 // (see proto/README.md's "Why these RPC shapes"), and this handler relays
 // that live rather than buffering the full answer like documentHandlers
 // does for ChunkAndEmbed's progress stream. Each SSE event is one of
-// "token" (a generated token), "final" (citations/usage/latency, always
-// last), or "error" (terminal).
+// "token" (a generated token), "final" (session_id/citations/usage/latency,
+// always last), or "error" (terminal).
+//
+// Conversation memory is server-side, keyed by session_id: an omitted
+// session_id gets one minted here (returned in the "final" event so a
+// client can reuse it for follow-ups) and its prior turns are loaded from
+// conversation.Store automatically — a caller doesn't need to resend the
+// whole transcript on every turn. Explicitly supplying "history" in the
+// request body overrides that lookup instead (the stateless mode Phase 9
+// shipped, still useful for a caller managing its own transcript). Either
+// way, the question and generated answer are appended to the session's
+// stored history once the answer finishes, so the next turn sees it.
 func (h *RAGHandlers) Query(c *gin.Context) {
 	var body queryRequestBody
 	if err := c.ShouldBindJSON(&body); err != nil {
@@ -73,18 +90,19 @@ func (h *RAGHandlers) Query(c *gin.Context) {
 		return
 	}
 
-	history := make([]*commonv1.ConversationTurn, 0, len(body.History))
-	for _, turn := range body.History {
-		role, err := parseConversationRole(turn.Role)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-		history = append(history, &commonv1.ConversationTurn{Role: role, Content: turn.Content})
+	sessionID := body.SessionID
+	if sessionID == "" {
+		sessionID = uuid.NewString()
+	}
+
+	history, err := h.resolveHistory(c.Request.Context(), sessionID, body.History)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
 	}
 
 	events, err := h.answerer.Query(c.Request.Context(), &ragv1.QueryRequest{
-		SessionId: body.SessionID,
+		SessionId: sessionID,
 		Question:  body.Question,
 		History:   history,
 		Filter:    buildMetadataFilterFromLists(body.Tickers, body.FilingTypes, body.FiscalPeriod),
@@ -99,6 +117,7 @@ func (h *RAGHandlers) Query(c *gin.Context) {
 	c.Writer.Header().Set("Cache-Control", "no-cache")
 	c.Writer.Header().Set("Connection", "keep-alive")
 
+	var answer strings.Builder
 	c.Stream(func(w io.Writer) bool {
 		event, ok := <-events
 		if !ok {
@@ -121,6 +140,7 @@ func (h *RAGHandlers) Query(c *gin.Context) {
 			}
 			usage := event.Final.GetUsage()
 			c.SSEvent("final", queryFinalView{
+				SessionID: sessionID,
 				Citations: citations,
 				Usage: tokenUsageView{
 					PromptTokens:     usage.GetPromptTokens(),
@@ -129,12 +149,58 @@ func (h *RAGHandlers) Query(c *gin.Context) {
 				},
 				LatencyMs: float64(event.Final.GetLatencyMs()),
 			})
+			h.persistTurns(c.Request.Context(), sessionID, body.Question, answer.String())
 			return false
 		default:
+			answer.WriteString(event.Token)
 			c.SSEvent("token", gin.H{"token": event.Token})
 			return true
 		}
 	})
+}
+
+// resolveHistory implements the precedence documented on Query: an
+// explicit request-body history wins; otherwise the session's stored
+// history (possibly empty, for a brand new session) is used.
+func (h *RAGHandlers) resolveHistory(
+	ctx context.Context, sessionID string, bodyHistory []conversationTurnBody,
+) ([]*commonv1.ConversationTurn, error) {
+	if len(bodyHistory) > 0 {
+		history := make([]*commonv1.ConversationTurn, 0, len(bodyHistory))
+		for _, turn := range bodyHistory {
+			role, err := parseConversationRole(turn.Role)
+			if err != nil {
+				return nil, err
+			}
+			history = append(history, &commonv1.ConversationTurn{Role: role, Content: turn.Content})
+		}
+		return history, nil
+	}
+
+	stored, err := h.conversations.History(ctx, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("load conversation history: %w", err)
+	}
+	history := make([]*commonv1.ConversationTurn, 0, len(stored))
+	for _, turn := range stored {
+		history = append(history, &commonv1.ConversationTurn{
+			Role:    conversationRoleToProto(turn.Role),
+			Content: turn.Content,
+		})
+	}
+	return history, nil
+}
+
+// persistTurns is best-effort: conversation memory is a UX convenience
+// (skip resending the transcript), not a correctness requirement, so a
+// storage failure here logs implicitly via the returned error being
+// dropped rather than failing a response the client already received.
+func (h *RAGHandlers) persistTurns(ctx context.Context, sessionID, question, answer string) {
+	now := time.Now()
+	_ = h.conversations.AppendTurns(ctx, sessionID,
+		conversation.Turn{Role: conversation.RoleUser, Content: question, CreatedAt: now},
+		conversation.Turn{Role: conversation.RoleAssistant, Content: answer, CreatedAt: now},
+	)
 }
 
 type summarizeResponseView struct {
@@ -215,6 +281,17 @@ func parseConversationRole(raw string) (commonv1.ConversationRole, error) {
 		return commonv1.ConversationRole_CONVERSATION_ROLE_UNSPECIFIED,
 			fmt.Errorf("invalid history role %q: must be user or assistant", raw)
 	}
+}
+
+// conversationRoleToProto converts a stored conversation.Turn's role to the
+// proto enum — the counterpart to parseConversationRole, which converts the
+// other direction (JSON request body -> proto) for explicitly-supplied
+// history.
+func conversationRoleToProto(role conversation.Role) commonv1.ConversationRole {
+	if role == conversation.RoleAssistant {
+		return commonv1.ConversationRole_CONVERSATION_ROLE_ASSISTANT
+	}
+	return commonv1.ConversationRole_CONVERSATION_ROLE_USER
 }
 
 // buildMetadataFilterFromLists mirrors buildMetadataFilter (search.go) but
