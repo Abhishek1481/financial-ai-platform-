@@ -6,7 +6,7 @@ streaming, caching (later phases) — never ML/NLP itself, which is
 `ml-service`'s job exclusively (see [`/docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md)
 for why the boundary is drawn this way).
 
-## Status (Phase 13)
+## Status (Phase 14)
 
 Phase 4 built the skeleton (HTTP lifecycle, logging, health/metrics).
 Phase 5 added JWT auth and RBAC. Phase 6 added document ingestion: upload,
@@ -52,6 +52,18 @@ that prunes abandoned `conversation.MemoryStore` sessions
 doesn't leak memory for sessions no one returns to. All three are
 in-memory/local, same "temporary but real" tradeoff as the repositories
 above — Redis lands in Phase 16.
+
+Phase 14 adds monitoring: `internal/mlclient`'s client interceptor
+instruments every ml-service call (`gateway_mlclient_requests_total`,
+`gateway_mlclient_request_duration_seconds`); `internal/cache`/`ratelimit`/
+`conversation` self-instrument (cache hit/miss, rate-limit rejections,
+active/pruned session counts); `internal/middleware.RequestID` mints or
+forwards a correlation ID per HTTP request, echoed as `X-Request-ID` and
+carried to ml-service as gRPC metadata so both services' structured logs
+for one request share an ID (see `docs/monitoring/README.md` for why this
+is a deliberately scoped-down alternative to full OpenTelemetry tracing —
+no collector is deployed until Phase 16). `docs/monitoring/` also has a
+Prometheus scrape config and an importable Grafana dashboard.
 
 ```
 POST /api/v1/auth/register   {email, password} -> 201 {id, email, role}   (always role "user")
@@ -153,6 +165,7 @@ gateway-go/
 │   ├── cache/                       in-memory TTL cache (GET /api/v1/search)
 │   ├── ratelimit/                   per-client token-bucket rate limiter
 │   ├── scheduler/                   generic "run this every N minutes" background job
+│   ├── reqid/                        per-request correlation ID, carried into mlclient's gRPC metadata
 │   ├── handlers/                /healthz, /api/v1/auth/*, /api/v1/me, /api/v1/admin/*, /api/v1/documents*, /api/v1/search, /api/v1/rag/query
 │   ├── metrics/                 Prometheus middleware + /metrics handler
 │   ├── middleware/              structured request logging, panic recovery

@@ -7,7 +7,7 @@ summarization, and model evaluation. It has **no public HTTP port** —
 [`/proto`](../proto) for the contracts and [`/docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md)
 for why the boundary is drawn this way).
 
-## Status (Phase 12)
+## Status (Phase 14)
 
 Phase 3 built the skeleton: every RPC from every service in `/proto` is
 registered and reachable, the standard gRPC health-checking and reflection
@@ -133,6 +133,26 @@ answer scored `faithfulness=1.0, hallucination_score=0.0`, and a
 fabricated answer over the same context scored `faithfulness=0.0,
 hallucination_score=1.0` — the scoring genuinely discriminates, not just
 plumbing that always returns the same numbers.
+
+Phase 14 adds monitoring: `app/observability.py`'s `ObservabilityInterceptor`
+(a `grpc.aio.ServerInterceptor`, applied once at server construction rather
+than by hand in every servicer) records `ml_service_grpc_requests_total`
+and `ml_service_grpc_request_duration_seconds` for every RPC regardless of
+shape (unary-unary, unary-stream, stream-unary, stream-stream — this
+service uses all four), exposed over HTTP via `prometheus_client.start_http_server`
+on `ML_SERVICE_METRICS_PORT` (default 9091). The same interceptor extracts
+an `x-request-id` gRPC metadata value (forwarded by `gateway-go`'s
+`internal/mlclient`) and makes it available to every log line emitted
+while handling that RPC (`app/tracing.py`, a contextvar + logging filter)
+— see `docs/monitoring/README.md` for why this is a deliberately
+scoped-down alternative to full OpenTelemetry tracing in an environment
+with no collector deployed yet.
+
+Verified end-to-end against a live `gateway-go` + `ml-service` pair: after
+one search request through the full HTTP -> gRPC path, both services'
+`/metrics` endpoints showed the matching call recorded exactly once on
+each side (`gateway_mlclient_requests_total` and
+`ml_service_grpc_requests_total`, same method, same status).
 
 ## Setup
 

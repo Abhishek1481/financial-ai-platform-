@@ -16,7 +16,15 @@ package cache
 import (
 	"sync"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 )
+
+var requestsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+	Name: "gateway_cache_requests_total",
+	Help: "Total cache lookups, labeled by result (hit or miss).",
+}, []string{"result"})
 
 type Cache interface {
 	// Get returns the cached value and true, or ("", false) on a miss —
@@ -50,12 +58,15 @@ func (c *MemoryCache) Get(key string) (string, bool) {
 
 	e, ok := c.entries[key]
 	if !ok {
+		requestsTotal.WithLabelValues("miss").Inc()
 		return "", false
 	}
 	if time.Now().After(e.expiresAt) {
 		delete(c.entries, key)
+		requestsTotal.WithLabelValues("miss").Inc()
 		return "", false
 	}
+	requestsTotal.WithLabelValues("hit").Inc()
 	return e.value, true
 }
 

@@ -48,7 +48,11 @@ type Client struct {
 // machine, or later, sidecar-adjacent containers in the same pod/task);
 // this is the seam where mTLS gets added once that stops being true.
 func NewClient(addr string) (*Client, error) {
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(addr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithChainUnaryInterceptor(unaryClientInterceptor()),
+		grpc.WithChainStreamInterceptor(streamClientInterceptor()),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("mlclient: dial %s: %w", addr, err)
 	}

@@ -1,0 +1,116 @@
+{
+  "title": "Financial AI Platform",
+  "uid": "financial-ai-platform",
+  "schemaVersion": 39,
+  "timezone": "browser",
+  "time": { "from": "now-1h", "to": "now" },
+  "refresh": "10s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "gateway-go HTTP request rate",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(gateway_http_requests_total[1m])) by (route, status)",
+          "legendFormat": "{{route}} [{{status}}]"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "gateway-go HTTP p95 latency",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(gateway_http_request_duration_seconds_bucket[5m])) by (le, route))",
+          "legendFormat": "{{route}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "gateway-go -> ml-service call rate",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(gateway_mlclient_requests_total[1m])) by (method, status)",
+          "legendFormat": "{{method}} [{{status}}]"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "gateway-go -> ml-service p95 latency",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(gateway_mlclient_request_duration_seconds_bucket[5m])) by (le, method))",
+          "legendFormat": "{{method}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Search cache hit ratio",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 16, "w": 8, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(gateway_cache_requests_total{result=\"hit\"}[5m])) / sum(rate(gateway_cache_requests_total[5m]))",
+          "legendFormat": "hit ratio"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Rate limit rejections",
+      "type": "timeseries",
+      "gridPos": { "x": 8, "y": 16, "w": 8, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(gateway_rate_limit_rejections_total[1m]))",
+          "legendFormat": "429s/sec"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Active conversation sessions",
+      "type": "timeseries",
+      "gridPos": { "x": 16, "y": 16, "w": 8, "h": 8 },
+      "targets": [
+        { "expr": "gateway_conversation_sessions_active", "legendFormat": "active" },
+        { "expr": "sum(rate(gateway_conversation_sessions_pruned_total[10m]))", "legendFormat": "pruned/sec" }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "ml-service gRPC request rate",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 24, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(ml_service_grpc_requests_total[1m])) by (method, status)",
+          "legendFormat": "{{method}} [{{status}}]"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "ml-service gRPC p95 latency",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 24, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(ml_service_grpc_request_duration_seconds_bucket[5m])) by (le, method))",
+          "legendFormat": "{{method}}"
+        }
+      ]
+    }
+  ]
+}

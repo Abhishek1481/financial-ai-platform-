@@ -71,6 +71,7 @@ func New(cfg config.Config, logger *slog.Logger, deps Dependencies) *Server {
 	engine := gin.New()
 	engine.Use(
 		appmiddleware.Recovery(logger),
+		appmiddleware.RequestID(),
 		appmiddleware.Logging(logger),
 		metrics.Middleware(),
 	)

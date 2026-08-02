@@ -17,12 +17,14 @@ from collections.abc import Callable
 import grpc
 from grpc_health.v1 import health, health_pb2, health_pb2_grpc
 from grpc_reflection.v1alpha import reflection
+from prometheus_client import start_http_server
 
 from app import _bootstrap  # noqa: F401  (must run before generated-stub imports)
 from app.config import Settings, get_settings
 from app.embeddings.model import EmbeddingModel
 from app.embeddings.vector_store import FaissVectorStore
 from app.logging import configure_logging, get_logger
+from app.observability import ObservabilityInterceptor
 from app.rag.llm_client import build_llm_client
 from app.search.keyword_index import KeywordIndex
 from app.servicers.embeddings import EmbeddingServicer
@@ -112,7 +114,7 @@ async def build_server(settings: Settings) -> tuple[grpc.aio.Server, int]:
     also installing OS signal handlers, which only make sense for the real
     process.
     """
-    server = grpc.aio.server()
+    server = grpc.aio.server(interceptors=[ObservabilityInterceptor()])
 
     reflected_service_names = [health.SERVICE_NAME, reflection.SERVICE_NAME]
 
@@ -157,11 +159,21 @@ async def serve() -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
 
+    # Runs its own background thread (prometheus_client's own server, not
+    # part of the grpc.aio event loop) — a separate port from the gRPC one,
+    # never started in build_server() itself so tests (which construct many
+    # servers on ephemeral ports) don't all fight over one fixed metrics port.
+    start_http_server(settings.metrics_port)
+
     server, bound_port = await build_server(settings)
     await server.start()
     logger.info(
         "ml-service listening",
-        extra={"port": bound_port, "environment": settings.environment},
+        extra={
+            "port": bound_port,
+            "metrics_port": settings.metrics_port,
+            "environment": settings.environment,
+        },
     )
 
     stop_event = asyncio.Event()

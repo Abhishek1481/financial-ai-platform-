@@ -26,6 +26,12 @@ class Settings(BaseSettings):
     grpc_port: int = 50051
     log_level: str = "INFO"
 
+    # Prometheus exposition (app/observability.py's metrics), served over
+    # plain HTTP by prometheus_client.start_http_server — a separate port
+    # from the gRPC one, same "metrics never share a port with the real
+    # traffic" reasoning as gateway-go's GATEWAY_METRICS_PORT.
+    metrics_port: int = 9091
+
     # Reflection lets `grpcurl`/`grpcui` introspect the running service
     # without the .proto files on hand — invaluable in dev, disabled in
     # prod so the wire schema isn't handed out to anyone who can reach the

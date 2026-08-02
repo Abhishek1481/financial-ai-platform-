@@ -10,8 +10,15 @@ import (
 	"sync"
 
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"golang.org/x/time/rate"
 )
+
+var rejectionsTotal = promauto.NewCounter(prometheus.CounterOpts{
+	Name: "gateway_rate_limit_rejections_total",
+	Help: "Total requests rejected with 429 for exceeding their client's rate limit.",
+})
 
 // Limiter holds one token bucket per key, created lazily on first use.
 // The map grows by one entry per distinct key ever seen and is never
@@ -55,6 +62,7 @@ func (l *Limiter) Allow(key string) bool {
 func (l *Limiter) Middleware(keyFunc func(c *gin.Context) string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if !l.Allow(keyFunc(c)) {
+			rejectionsTotal.Inc()
 			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "rate limit exceeded"})
 			return
 		}

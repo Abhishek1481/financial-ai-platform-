@@ -3,8 +3,9 @@
 Every log line is a JSON object so it can be ingested by a log aggregator
 (CloudWatch, Loki, etc.) without a parsing layer in front of it — plain-text
 log lines are fine on a laptop and a liability in production. Kept on the
-stdlib logging module (no extra dependency) since this is all the service
-needs before OpenTelemetry log correlation lands in Phase 14.
+stdlib logging module (no extra dependency) — Phase 14 adds request-ID log
+correlation (see app/tracing.py) on top of this rather than pulling in a
+full OpenTelemetry SDK.
 """
 
 from __future__ import annotations
@@ -14,6 +15,8 @@ import logging
 import sys
 from datetime import UTC, datetime
 from typing import Any
+
+from app.tracing import RequestIDLogFilter
 
 _RESERVED_LOG_RECORD_ATTRS = frozenset(logging.LogRecord("", 0, "", 0, "", (), None).__dict__)
 
@@ -38,6 +41,7 @@ class JSONFormatter(logging.Formatter):
 def configure_logging(level: str = "INFO") -> None:
     handler = logging.StreamHandler(stream=sys.stdout)
     handler.setFormatter(JSONFormatter())
+    handler.addFilter(RequestIDLogFilter())
 
     root = logging.getLogger()
     root.handlers = [handler]

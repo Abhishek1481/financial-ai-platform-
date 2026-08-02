@@ -33,7 +33,7 @@ it's clear what's real vs. planned at any point in time.
       context recall, hallucination detection, latency/token tracking.
 - [x] **Phase 13 — Caching, rate limiting, scheduler.** Redis cache, rate
       limiter, job scheduler, worker pool in Go.
-- [ ] **Phase 14 — Monitoring.** Prometheus metrics across all services,
+- [x] **Phase 14 — Monitoring.** Prometheus metrics across all services,
       Grafana dashboards, OpenTelemetry tracing/logging.
 - [ ] **Phase 15 — Admin dashboard.** Documents, users, jobs, embedding
       status, metrics, logs.

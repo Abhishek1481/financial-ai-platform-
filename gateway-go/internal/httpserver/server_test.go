@@ -29,6 +29,7 @@ import (
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/evaluation"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/health"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/ingestion"
+	appmiddleware "github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/middleware"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/mlclient"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/rag"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/ratelimit"
@@ -1444,4 +1445,34 @@ func extractSessionID(t *testing.T, sseBody string) string {
 		return ""
 	}
 	return rest[:end]
+}
+
+func TestRequestID_IsGeneratedWhenNotSupplied(t *testing.T) {
+	server := startTestServer(t)
+
+	resp := getWithToken(t, "http://"+server.HTTPAddr()+"/healthz", "")
+	defer resp.Body.Close()
+
+	if resp.Header.Get(appmiddleware.RequestIDHeader) == "" {
+		t.Error("expected a generated X-Request-ID response header")
+	}
+}
+
+func TestRequestID_SuppliedValueIsEchoedBack(t *testing.T) {
+	server := startTestServer(t)
+
+	req, err := http.NewRequest(http.MethodGet, "http://"+server.HTTPAddr()+"/healthz", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set(appmiddleware.RequestIDHeader, "caller-supplied-id")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if got := resp.Header.Get(appmiddleware.RequestIDHeader); got != "caller-supplied-id" {
+		t.Errorf("X-Request-ID = %q, want it echoed back unchanged", got)
+	}
 }

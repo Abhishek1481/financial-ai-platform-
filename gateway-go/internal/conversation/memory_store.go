@@ -4,6 +4,20 @@ import (
 	"context"
 	"sync"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+)
+
+var (
+	sessionsActive = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "gateway_conversation_sessions_active",
+		Help: "Number of conversation sessions currently held in memory.",
+	})
+	sessionsPrunedTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "gateway_conversation_sessions_pruned_total",
+		Help: "Total conversation sessions removed by the periodic staleness prune.",
+	})
 )
 
 // maxTurnsPerSession bounds how much history a session accumulates —
@@ -41,6 +55,7 @@ func (s *MemoryStore) AppendTurns(ctx context.Context, sessionID string, turns .
 	}
 	s.turnsBy[sessionID] = updated
 	s.lastActivity[sessionID] = time.Now()
+	sessionsActive.Set(float64(len(s.turnsBy)))
 	return nil
 }
 
@@ -72,6 +87,10 @@ func (s *MemoryStore) PruneOlderThan(cutoff time.Time) int {
 			delete(s.lastActivity, sessionID)
 			pruned++
 		}
+	}
+	if pruned > 0 {
+		sessionsPrunedTotal.Add(float64(pruned))
+		sessionsActive.Set(float64(len(s.turnsBy)))
 	}
 	return pruned
 }
