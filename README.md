@@ -1,10 +1,6 @@
 # Financial Intelligence AI Platform
 
-[![CI](https://github.com/Abhishek1481/financial-ai-platform-/actions/workflows/ci.yml/badge.svg)](https://github.com/Abhishek1481/financial-ai-platform-/actions/workflows/ci.yml)
-[![Docker build](https://github.com/Abhishek1481/financial-ai-platform-/actions/workflows/docker-build.yml/badge.svg)](https://github.com/Abhishek1481/financial-ai-platform-/actions/workflows/docker-build.yml)
-[![Terraform validate](https://github.com/Abhishek1481/financial-ai-platform-/actions/workflows/terraform-validate.yml/badge.svg)](https://github.com/Abhishek1481/financial-ai-platform-/actions/workflows/terraform-validate.yml)
-[![Kubernetes manifests validate](https://github.com/Abhishek1481/financial-ai-platform-/actions/workflows/k8s-validate.yml/badge.svg)](https://github.com/Abhishek1481/financial-ai-platform-/actions/workflows/k8s-validate.yml)
-[![Security scan](https://github.com/Abhishek1481/financial-ai-platform-/actions/workflows/security.yml/badge.svg)](https://github.com/Abhishek1481/financial-ai-platform-/actions/workflows/security.yml)
+
 
 A production-shaped Retrieval-Augmented Generation (RAG) platform for querying SEC
 filings, earnings call transcripts, financial news, and company reports in natural
