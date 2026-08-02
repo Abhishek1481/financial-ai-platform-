@@ -1,0 +1,4 @@
+# Copy to terraform.tfvars (gitignored — see /.gitignore) and fill in.
+aws_region             = "us-east-1"
+azs                     = ["us-east-1a", "us-east-1b"]
+documents_bucket_name   = "financial-ai-platform-dev-documents-CHANGE-ME" # must be globally unique across all of AWS

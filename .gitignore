@@ -50,6 +50,9 @@ terraform/**/.terraform/
 terraform/**/*.tfstate
 terraform/**/*.tfstate.*
 terraform/**/.terraform.lock.hcl
+# Real values (terraform.tfvars.example is the committed template).
+terraform/**/terraform.tfvars
+terraform/**/*.auto.tfvars
 
 # OS
 .DS_Store

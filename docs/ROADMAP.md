@@ -39,7 +39,7 @@ it's clear what's real vs. planned at any point in time.
       status, metrics, logs.
 - [x] **Phase 16 — Docker Compose.** Full local stack.
 - [x] **Phase 17 — Kubernetes manifests.** Base + environment overlays.
-- [ ] **Phase 18 — Terraform.** AWS (ECS/EKS, S3, IAM, Secrets Manager,
+- [x] **Phase 18 — Terraform.** AWS (ECS/EKS, S3, IAM, Secrets Manager,
       CloudWatch).
 - [ ] **Phase 19 — CI/CD.** GitHub Actions: test, lint, security scan,
       build, push, deploy.
