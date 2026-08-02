@@ -1,0 +1,45 @@
+name: Security scan
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  schedule:
+    # Weekly, independent of any push — catches a newly-disclosed CVE in
+    # an unchanged dependency, which a push-triggered scan alone never
+    # would (nothing about the code changed, so nothing would re-trigger
+    # it).
+    - cron: "0 6 * * 1"
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gosec:
+    name: gosec (gateway-go)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: gateway-go/go.mod
+      - name: Run gosec
+        uses: securego/gosec@master
+        with:
+          args: "-exclude-dir=bin ./gateway-go/..."
+
+  pip-audit:
+    name: pip-audit (ml-service dependency CVEs)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ml-service's full resolved dependency tree
+        run: |
+          cd ml-service
+          pip install --no-cache-dir .
+      - name: Audit the installed environment
+        run: pip install --no-cache-dir pip-audit && pip-audit

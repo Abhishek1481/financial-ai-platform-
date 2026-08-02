@@ -1,0 +1,44 @@
+name: Kubernetes manifests validate
+
+# The first real validation of k8s/ beyond a plain YAML parser (see
+# k8s/README.md's verification note) — no cluster or kubectl/kustomize
+# binary is available in local development. `kubectl kustomize` renders
+# both overlays (catches an invalid patch path, a dangling resource
+# reference, malformed kustomization.yaml) and kubeconform checks the
+# rendered output against the real Kubernetes API schemas (catches a
+# typo'd field name, a wrong type, a missing required field) — neither
+# needs a live cluster or AWS credentials.
+on:
+  push:
+    branches: [master, main]
+    paths: ["k8s/**"]
+  pull_request:
+    paths: ["k8s/**"]
+
+concurrency:
+  group: k8s-validate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    strategy:
+      matrix:
+        overlay: [dev, prod]
+    name: validate ${{ matrix.overlay }} overlay
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-kubectl@v4
+
+      - name: Install kubeconform
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz \
+            | tar xz kubeconform
+          sudo mv kubeconform /usr/local/bin/
+
+      - name: Render ${{ matrix.overlay }} overlay
+        run: kubectl kustomize k8s/overlays/${{ matrix.overlay }} > /tmp/rendered.yaml
+
+      - name: Validate rendered manifests against the Kubernetes API schema
+        run: kubeconform -strict -summary /tmp/rendered.yaml

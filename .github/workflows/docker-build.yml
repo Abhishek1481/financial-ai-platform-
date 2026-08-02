@@ -1,0 +1,49 @@
+name: Docker build
+
+# The first real, verified build of docker/gateway-go.Dockerfile and
+# docker/ml-service.Dockerfile — neither has a Docker daemon available in
+# local development (see docker/README.md's verification note); GitHub's
+# runners actually have Docker, so this workflow is what closes that gap.
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - "docker/**"
+      - "gateway-go/**"
+      - "ml-service/**"
+      - "proto/**"
+  pull_request:
+    paths:
+      - "docker/**"
+      - "gateway-go/**"
+      - "ml-service/**"
+      - "proto/**"
+
+concurrency:
+  group: docker-build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        service: [gateway-go, ml-service]
+    name: build ${{ matrix.service }} image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build (no push — this job only proves the Dockerfile builds)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/${{ matrix.service }}.Dockerfile
+          push: false
+          # GitHub Actions' own cache backend — speeds up repeat builds
+          # (the proto-gen and dependency-install stages rarely change)
+          # without needing a registry to cache against.
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+          tags: financial-ai-platform/${{ matrix.service }}:ci

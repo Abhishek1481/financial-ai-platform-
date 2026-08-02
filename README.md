@@ -1,5 +1,11 @@
 # Financial Intelligence AI Platform
 
+[![CI](https://github.com/Abhishek1481/financial-ai-platform-/actions/workflows/ci.yml/badge.svg)](https://github.com/Abhishek1481/financial-ai-platform-/actions/workflows/ci.yml)
+[![Docker build](https://github.com/Abhishek1481/financial-ai-platform-/actions/workflows/docker-build.yml/badge.svg)](https://github.com/Abhishek1481/financial-ai-platform-/actions/workflows/docker-build.yml)
+[![Terraform validate](https://github.com/Abhishek1481/financial-ai-platform-/actions/workflows/terraform-validate.yml/badge.svg)](https://github.com/Abhishek1481/financial-ai-platform-/actions/workflows/terraform-validate.yml)
+[![Kubernetes manifests validate](https://github.com/Abhishek1481/financial-ai-platform-/actions/workflows/k8s-validate.yml/badge.svg)](https://github.com/Abhishek1481/financial-ai-platform-/actions/workflows/k8s-validate.yml)
+[![Security scan](https://github.com/Abhishek1481/financial-ai-platform-/actions/workflows/security.yml/badge.svg)](https://github.com/Abhishek1481/financial-ai-platform-/actions/workflows/security.yml)
+
 A production-shaped Retrieval-Augmented Generation (RAG) platform for querying SEC
 filings, earnings call transcripts, financial news, and company reports in natural
 language — e.g. *"What risks are mentioned in Apple's latest 10-K?"* or *"What
@@ -52,6 +58,33 @@ financial-ai-platform/
 Under active, incremental construction — see [`docs/ROADMAP.md`](docs/ROADMAP.md)
 for what's built vs. planned. Each phase lands with its own explanation of the
 design decisions behind it.
+
+## CI/CD
+
+Five workflows in [`.github/workflows/`](.github/workflows/), each scoped to
+what it actually validates:
+
+- **`ci.yml`** — `go build`/`vet`/`gofmt`/`test` for `gateway-go`;
+  `ruff`/`mypy`/`pytest` for `ml-service`, including the CI eval-regression
+  gate ([`tests/unit/ml_service/test_eval_gate.py`](tests/unit/ml_service/test_eval_gate.py))
+  promised back in Phase 12.
+- **`docker-build.yml`** — builds both Dockerfiles on GitHub's runners, the
+  first real verification either one builds at all (no Docker daemon exists
+  in this project's own development environment — see
+  [`docker/README.md`](docker/README.md)).
+- **`terraform-validate.yml`** / **`k8s-validate.yml`** — same story for
+  Terraform (`fmt` + `validate`, no AWS credentials needed) and Kubernetes
+  manifests (`kubectl kustomize` + schema validation against the real K8s
+  API via `kubeconform`, no cluster needed).
+- **`security.yml`** — `gosec` (Go) and `pip-audit` (Python dependency CVEs),
+  on every push/PR plus a weekly schedule so a newly-disclosed CVE in an
+  unchanged dependency still gets caught.
+
+Deliberately **not** wired up: pushing built images to a registry or
+deploying anywhere. `docker-build.yml` builds with `push: false` — flipping
+that on, adding registry credentials, and pointing `kubectl`/`terraform` at
+a real target are the natural next step once there's an actual cluster/AWS
+account to deploy to, not something to fake against nothing.
 
 ## License
 

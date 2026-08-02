@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+# Cancels a stale run when new commits land on the same PR/branch — no
+# reason to keep running CI against code that's already been superseded.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gateway-go:
+    name: gateway-go (build, vet, fmt, test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: gateway-go/go.mod
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # proto/gen/go is gitignored (generated, never committed — see
+      # /proto/README.md), so CI regenerates it the same way a fresh
+      # checkout always has to, mirroring what
+      # docker/gateway-go.Dockerfile's proto-gen stage does.
+      - name: Install protoc plugins
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Generate Go proto stubs
+        run: |
+          pip install --no-cache-dir grpcio-tools
+          make proto-go
+
+      - name: go build
+        run: go build ./gateway-go/...
+
+      - name: go vet
+        run: go vet ./gateway-go/...
+
+      - name: gofmt check
+        run: test -z "$(gofmt -l gateway-go)"
+
+      - name: go test
+        run: go test ./gateway-go/... -v
+
+  ml-service:
+    name: ml-service (ruff, mypy, pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: ml-service/pyproject.toml
+
+      - name: Install ml-service
+        run: |
+          cd ml-service
+          pip install --no-cache-dir -e ".[dev]"
+
+      - name: Generate Python proto stubs
+        run: make proto-python
+
+      - name: ruff check
+        run: ruff check ml-service/app tests
+
+      - name: ruff format --check
+        run: ruff format --check ml-service/app tests
+
+      - name: mypy
+        run: |
+          cd ml-service
+          mypy app
+
+      # Includes tests/unit/ml_service/test_eval_gate.py — the CI eval-
+      # regression gate promised back in Phase 12: a real embed -> query
+      # -> BatchEvaluate pass over a fixed golden set, failing the build
+      # if mean faithfulness/hallucination drift past their thresholds.
+      - name: pytest
+        run: |
+          cd ml-service
+          python -m pytest ../tests/unit/ml_service -v

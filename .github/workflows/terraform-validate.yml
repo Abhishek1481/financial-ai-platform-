@@ -1,0 +1,51 @@
+name: Terraform validate
+
+# The first real terraform fmt/validate pass on terraform/ — no terraform
+# binary is available in local development (see terraform/README.md's
+# verification note, which only got as far as a Python HCL2 parser plus a
+# hand-written required-variable cross-check). `terraform validate` needs
+# no AWS credentials (it checks configuration internal consistency —
+# types, references, required arguments — not that resources could
+# actually be created), so this runs safely on every PR with no secrets
+# involved.
+on:
+  push:
+    branches: [master, main]
+    paths: ["terraform/**"]
+  pull_request:
+    paths: ["terraform/**"]
+
+concurrency:
+  group: terraform-validate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    strategy:
+      matrix:
+        environment: [dev, prod]
+    name: validate ${{ matrix.environment }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform/environments/${{ matrix.environment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9"
+
+      - name: terraform fmt -check
+        run: terraform fmt -check -recursive ../../
+
+      # -backend=false: validates configuration, doesn't touch the S3
+      # backend terraform/environments/*/versions.tf leaves commented out
+      # (see that file's own comment on why — the backend bucket has to
+      # exist before Terraform can store state in it, a bootstrapping
+      # step this workflow isn't set up to do).
+      - name: terraform init
+        run: terraform init -backend=false
+
+      - name: terraform validate
+        run: terraform validate
