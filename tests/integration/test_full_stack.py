@@ -47,7 +47,12 @@ _ML_SERVICE_METRICS_PORT = 9199
 _GATEWAY_HTTP_PORT = 8199
 _GATEWAY_METRICS_PORT = 9198
 
-_STARTUP_TIMEOUT_S = 30
+# Generous on purpose: a cold GitHub Actions runner does a from-scratch
+# `go run` compile (no warm module/build cache the first time this ever
+# ran — see ci.yml's actions/cache step), which is meaningfully slower
+# than a warm local dev machine. 30s was fine locally and still failed
+# in CI the first time this job ever actually got to run.
+_STARTUP_TIMEOUT_S = 90
 
 
 def _python_executable() -> str:
@@ -226,7 +231,12 @@ def test_upload_extract_embed_and_search_flow(stack: str):
     assert upload_resp.status_code == 202, upload_resp.text
     document_id = upload_resp.json()["document_id"]
 
-    deadline = time.monotonic() + 20
+    # 60s, not 20s: this is the embedding pipeline's first real run in
+    # the process, and EmbeddingModel.load() is lazy (see
+    # app/embeddings/model.py) — the *first* call downloads the model
+    # from HuggingFace Hub, which a cold CI runner with no cache has to
+    # do over the network before this job can ever reach "completed".
+    deadline = time.monotonic() + 60
     status = None
     while time.monotonic() < deadline:
         doc_resp = requests.get(
@@ -267,7 +277,7 @@ def test_rag_query_streams_tokens_and_cites_the_uploaded_document(stack: str):
     )
     document_id = upload_resp.json()["document_id"]
 
-    deadline = time.monotonic() + 20
+    deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
         doc_resp = requests.get(
             f"{stack}/api/v1/documents/{document_id}",

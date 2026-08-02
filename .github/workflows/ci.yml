@@ -21,6 +21,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: gateway-go/go.mod
+          cache-dependency-path: gateway-go/go.sum
 
       - uses: actions/setup-python@v5
         with:
@@ -106,12 +107,32 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: gateway-go/go.mod
+          # Without this, setup-go's automatic module-cache restore
+          # can't locate gateway-go/go.sum (it doesn't look in
+          # subdirectories by default) and silently runs cold every
+          # time — a real contributor to this job's first-ever
+          # `go run ./cmd/gateway` compile blowing past a 30s startup
+          # timeout (see tests/integration/test_full_stack.py).
+          cache-dependency-path: gateway-go/go.sum
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: ml-service/pyproject.toml
+
+      # EmbeddingModel (ml-service/app/embeddings/model.py) lazily
+      # downloads sentence-transformers/all-MiniLM-L6-v2 from Hugging
+      # Face Hub on its first real use, which only happens here — the
+      # unit-test suite fakes it. Without this cache, that download
+      # competes with the same 60s budget test_full_stack.py gives the
+      # embedding pipeline to finish, on a cold runner, over the
+      # network, every single run.
+      - name: Cache Hugging Face model weights
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-models-all-MiniLM-L6-v2
 
       - name: Install protoc plugins
         run: |
