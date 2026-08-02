@@ -191,6 +191,17 @@ func (s *Service) GetLatestJob(ctx context.Context, documentID string) (Job, err
 	return s.jobs.FindLatestByDocumentID(ctx, documentID)
 }
 
+// ListDocuments and ListJobs power the admin dashboard (Phase 15) —
+// gated by RBAC at the handler layer, same reasoning as
+// auth.Service.ListUsers.
+func (s *Service) ListDocuments(ctx context.Context) ([]Document, error) {
+	return s.docs.ListAll(ctx)
+}
+
+func (s *Service) ListJobs(ctx context.Context) ([]Job, error) {
+	return s.jobs.ListAll(ctx)
+}
+
 // processJob is the worker pool's ProcessFunc — it runs on the pool's
 // background context, well after the HTTP request that created the job
 // has already returned. It chains two ml-service calls: extraction, then

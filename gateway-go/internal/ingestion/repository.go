@@ -21,6 +21,11 @@ type DocumentRepository interface {
 	Create(ctx context.Context, doc Document) error
 	FindByID(ctx context.Context, id string) (Document, error)
 	FindByContentHash(ctx context.Context, hash string) (Document, error)
+	// ListAll powers the admin dashboard's document listing (Phase 15) —
+	// no pagination yet, same accepted limitation as
+	// auth.UserRepository.ListAll at this store's in-memory, dev-scale
+	// data volumes.
+	ListAll(ctx context.Context) ([]Document, error)
 }
 
 type JobRepository interface {
@@ -28,4 +33,8 @@ type JobRepository interface {
 	Update(ctx context.Context, job Job) error
 	FindByID(ctx context.Context, id string) (Job, error)
 	FindLatestByDocumentID(ctx context.Context, documentID string) (Job, error)
+	// ListAll powers the admin dashboard's job listing (Phase 15) — every
+	// attempt at every document, not just the latest per document (that's
+	// FindLatestByDocumentID's job).
+	ListAll(ctx context.Context) ([]Job, error)
 }

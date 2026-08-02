@@ -1476,3 +1476,170 @@ func TestRequestID_SuppliedValueIsEchoedBack(t *testing.T) {
 		t.Errorf("X-Request-ID = %q, want it echoed back unchanged", got)
 	}
 }
+
+func TestAdminUsers_RequiresAdminRole(t *testing.T) {
+	server := startTestServer(t)
+	baseURL := "http://" + server.HTTPAddr()
+
+	registerResp := postJSON(t, baseURL+"/api/v1/auth/register", map[string]string{
+		"email":    "admin-users@test.local",
+		"password": "correct-horse-battery",
+	})
+	registerResp.Body.Close()
+	userToken := login(t, baseURL, "admin-users@test.local", "correct-horse-battery")
+
+	resp := getWithToken(t, baseURL+"/api/v1/admin/users", userToken)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusForbidden)
+	}
+}
+
+func TestAdminUsers_ListsRegisteredUsersWithoutPasswordHash(t *testing.T) {
+	server := startTestServer(t)
+	baseURL := "http://" + server.HTTPAddr()
+
+	registerResp := postJSON(t, baseURL+"/api/v1/auth/register", map[string]string{
+		"email":    "admin-users2@test.local",
+		"password": "correct-horse-battery",
+	})
+	registerResp.Body.Close()
+	adminToken := login(t, baseURL, testAdminEmail, testAdminPassword)
+
+	resp := getWithToken(t, baseURL+"/api/v1/admin/users", adminToken)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if strings.Contains(string(body), "password") {
+		t.Errorf("response leaked a password-related field: %s", body)
+	}
+
+	var parsed struct {
+		Users []struct {
+			Email string `json:"email"`
+			Role  string `json:"role"`
+		} `json:"users"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		t.Fatalf("invalid response: %v", err)
+	}
+	// The seeded admin plus the just-registered user — both should be listed.
+	if len(parsed.Users) < 2 {
+		t.Errorf("users = %+v, want at least 2 (seeded admin + registered user)", parsed.Users)
+	}
+}
+
+func TestAdminDocuments_ListsUploadedDocumentsWithJobStatus(t *testing.T) {
+	server := startTestServer(t)
+	baseURL := "http://" + server.HTTPAddr()
+
+	registerResp := postJSON(t, baseURL+"/api/v1/auth/register", map[string]string{
+		"email":    "admin-docs@test.local",
+		"password": "correct-horse-battery",
+	})
+	registerResp.Body.Close()
+	userToken := login(t, baseURL, "admin-docs@test.local", "correct-horse-battery")
+
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+	part, err := writer.CreateFormFile("file", "report.txt")
+	if err != nil {
+		t.Fatalf("create form file: %v", err)
+	}
+	part.Write([]byte("some financial content"))
+	writer.Close()
+
+	uploadReq, err := http.NewRequest(http.MethodPost, baseURL+"/api/v1/documents", &buf)
+	if err != nil {
+		t.Fatalf("build upload request: %v", err)
+	}
+	uploadReq.Header.Set("Content-Type", writer.FormDataContentType())
+	uploadReq.Header.Set("Authorization", "Bearer "+userToken)
+	uploadResp, err := http.DefaultClient.Do(uploadReq)
+	if err != nil {
+		t.Fatalf("upload failed: %v", err)
+	}
+	uploadResp.Body.Close()
+
+	adminToken := login(t, baseURL, testAdminEmail, testAdminPassword)
+	resp := getWithToken(t, baseURL+"/api/v1/admin/documents", adminToken)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	var parsed struct {
+		Documents []struct {
+			Filename string `json:"filename"`
+			Job      struct {
+				Status string `json:"status"`
+			} `json:"job"`
+		} `json:"documents"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		t.Fatalf("invalid response: %v", err)
+	}
+	if len(parsed.Documents) != 1 || parsed.Documents[0].Filename != "report.txt" {
+		t.Errorf("documents = %+v", parsed.Documents)
+	}
+}
+
+func TestAdminJobs_ListsJobs(t *testing.T) {
+	server := startTestServer(t)
+	baseURL := "http://" + server.HTTPAddr()
+	adminToken := login(t, baseURL, testAdminEmail, testAdminPassword)
+
+	resp := getWithToken(t, baseURL+"/api/v1/admin/jobs", adminToken)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	var parsed struct {
+		Jobs []any `json:"jobs"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		t.Fatalf("invalid response: %v", err)
+	}
+	if parsed.Jobs == nil {
+		t.Error("jobs field missing from response")
+	}
+}
+
+func TestAdminStats_ReturnsAggregateCounts(t *testing.T) {
+	server := startTestServer(t)
+	baseURL := "http://" + server.HTTPAddr()
+
+	registerResp := postJSON(t, baseURL+"/api/v1/auth/register", map[string]string{
+		"email":    "admin-stats@test.local",
+		"password": "correct-horse-battery",
+	})
+	registerResp.Body.Close()
+	adminToken := login(t, baseURL, testAdminEmail, testAdminPassword)
+
+	resp := getWithToken(t, baseURL+"/api/v1/admin/stats", adminToken)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	var stats struct {
+		TotalUsers     int            `json:"total_users"`
+		TotalDocuments int            `json:"total_documents"`
+		TotalJobs      int            `json:"total_jobs"`
+		JobsByStatus   map[string]int `json:"jobs_by_status"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
+		t.Fatalf("invalid response: %v", err)
+	}
+	// Seeded admin + the user just registered above.
+	if stats.TotalUsers < 2 {
+		t.Errorf("total_users = %d, want at least 2", stats.TotalUsers)
+	}
+}

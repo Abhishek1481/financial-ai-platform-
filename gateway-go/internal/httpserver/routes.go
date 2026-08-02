@@ -19,7 +19,7 @@ func registerRoutes(engine *gin.Engine, deps Dependencies, maxUploadBytes int64)
 	documentHandlers := handlers.NewDocumentHandlers(deps.Ingestion, maxUploadBytes)
 	searchHandlers := handlers.NewSearchHandlers(deps.Searcher, deps.Cache, deps.SearchCacheTTL)
 	ragHandlers := handlers.NewRAGHandlers(deps.Answerer, deps.Conversations)
-	adminHandlers := handlers.NewAdminHandlers(deps.Evaluator)
+	adminHandlers := handlers.NewAdminHandlers(deps.Evaluator, deps.AuthService, deps.Ingestion)
 
 	v1 := engine.Group("/api/v1")
 	// Rate limiting runs as the first middleware on every /api/v1 route,
@@ -46,12 +46,13 @@ func registerRoutes(engine *gin.Engine, deps Dependencies, maxUploadBytes int64)
 	v1.GET("/search", authMW.Authenticate(), searchHandlers.Search)
 	v1.POST("/rag/query", authMW.Authenticate(), ragHandlers.Query)
 
-	// /ping is a placeholder proving RBAC actually gates access end-to-end;
-	// full admin endpoints (documents/users/jobs/metrics) arrive in Phase
-	// 15 — /evaluate (Phase 12) is the first real one, ahead of that,
-	// since answer-quality spot-checking is naturally an admin action.
+	// /ping is a placeholder proving RBAC actually gates access end-to-end.
 	admin := v1.Group("/admin")
 	admin.Use(authMW.Authenticate(), authMW.RequireRole(auth.RoleAdmin))
 	admin.GET("/ping", handlers.AdminPing)
 	admin.POST("/evaluate", adminHandlers.EvaluateAnswer)
+	admin.GET("/users", adminHandlers.ListUsers)
+	admin.GET("/documents", adminHandlers.ListDocuments)
+	admin.GET("/jobs", adminHandlers.ListJobs)
+	admin.GET("/stats", adminHandlers.Stats)
 }

@@ -35,7 +35,7 @@ it's clear what's real vs. planned at any point in time.
       limiter, job scheduler, worker pool in Go.
 - [x] **Phase 14 — Monitoring.** Prometheus metrics across all services,
       Grafana dashboards, OpenTelemetry tracing/logging.
-- [ ] **Phase 15 — Admin dashboard.** Documents, users, jobs, embedding
+- [x] **Phase 15 — Admin dashboard.** Documents, users, jobs, embedding
       status, metrics, logs.
 - [ ] **Phase 16 — Docker Compose.** Full local stack.
 - [ ] **Phase 17 — Kubernetes manifests.** Base + environment overlays.

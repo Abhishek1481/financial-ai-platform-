@@ -20,4 +20,8 @@ type UserRepository interface {
 	Create(ctx context.Context, user User) error
 	FindByEmail(ctx context.Context, email string) (User, error)
 	FindByID(ctx context.Context, id string) (User, error)
+	// ListAll powers the admin dashboard's user listing (Phase 15) — no
+	// pagination yet, an accepted limitation at this store's in-memory,
+	// dev-scale data volumes (see MemoryUserRepository's doc comment).
+	ListAll(ctx context.Context) ([]User, error)
 }

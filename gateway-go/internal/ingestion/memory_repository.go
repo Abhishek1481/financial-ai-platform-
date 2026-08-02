@@ -50,6 +50,16 @@ func (r *MemoryDocumentRepository) FindByContentHash(ctx context.Context, hash s
 	return r.byID[id], nil
 }
 
+func (r *MemoryDocumentRepository) ListAll(ctx context.Context) ([]Document, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	docs := make([]Document, 0, len(r.byID))
+	for _, doc := range r.byID {
+		docs = append(docs, doc)
+	}
+	return docs, nil
+}
+
 type MemoryJobRepository struct {
 	mu            sync.RWMutex
 	byID          map[string]Job
@@ -99,4 +109,14 @@ func (r *MemoryJobRepository) FindLatestByDocumentID(ctx context.Context, docume
 		return Job{}, ErrJobNotFound
 	}
 	return r.byID[jobID], nil
+}
+
+func (r *MemoryJobRepository) ListAll(ctx context.Context) ([]Job, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	jobs := make([]Job, 0, len(r.byID))
+	for _, job := range r.byID {
+		jobs = append(jobs, job)
+	}
+	return jobs, nil
 }

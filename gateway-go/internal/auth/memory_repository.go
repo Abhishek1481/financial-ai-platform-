@@ -63,6 +63,17 @@ func (r *MemoryUserRepository) FindByID(ctx context.Context, id string) (User, e
 	return user, nil
 }
 
+func (r *MemoryUserRepository) ListAll(ctx context.Context) ([]User, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	users := make([]User, 0, len(r.byID))
+	for _, user := range r.byID {
+		users = append(users, user)
+	}
+	return users, nil
+}
+
 func normalizeEmail(email string) string {
 	return strings.ToLower(strings.TrimSpace(email))
 }

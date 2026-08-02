@@ -6,7 +6,7 @@ streaming, caching (later phases) — never ML/NLP itself, which is
 `ml-service`'s job exclusively (see [`/docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md)
 for why the boundary is drawn this way).
 
-## Status (Phase 14)
+## Status (Phase 15)
 
 Phase 4 built the skeleton (HTTP lifecycle, logging, health/metrics).
 Phase 5 added JWT auth and RBAC. Phase 6 added document ingestion: upload,
@@ -65,6 +65,19 @@ is a deliberately scoped-down alternative to full OpenTelemetry tracing —
 no collector is deployed until Phase 16). `docs/monitoring/` also has a
 Prometheus scrape config and an importable Grafana dashboard.
 
+Phase 15 adds four read-only admin endpoints — `GET /api/v1/admin/{users,
+documents,jobs,stats}` — built on new `ListAll` methods on
+`auth.UserRepository`/`ingestion.{Document,Job}Repository` rather than a
+separate admin-only data path, so an admin sees the same data regular
+requests already produce, just across every user. `users` never
+serializes `PasswordHash` (the view type has no field for it — not a
+json tag hiding it). No pagination yet, an accepted limitation at these
+in-memory stores' dev-scale data volumes, same as everywhere else that
+tradeoff already exists (Postgres in Phase 16 is what actually needs
+pagination to matter). A dashboard *UI* (something a browser renders) is
+out of scope — this repo has no frontend framework in play; what this
+phase delivers is the API surface a UI would consume.
+
 ```
 POST /api/v1/auth/register   {email, password} -> 201 {id, email, role}   (always role "user")
 POST /api/v1/auth/login      {email, password} -> 200 {access_token, token_type, expires_in}
@@ -73,6 +86,10 @@ GET  /api/v1/admin/ping       Bearer token, admin role only -> 200 {message}
 POST /api/v1/admin/evaluate   Bearer token, admin role only, body: {question, answer, context?, ground_truth_answer?}
                                -> 200 {faithfulness, context_precision, context_recall,
                                         hallucination_score, answer_relevancy}
+GET  /api/v1/admin/users      Bearer token, admin role only -> 200 {users: [{id, email, role, created_at}]}
+GET  /api/v1/admin/documents  Bearer token, admin role only -> 200 {documents: [...]}  (every user's documents + job status)
+GET  /api/v1/admin/jobs       Bearer token, admin role only -> 200 {jobs: [...]}        (every processing attempt, not just latest)
+GET  /api/v1/admin/stats      Bearer token, admin role only -> 200 {total_users, total_documents, total_jobs, jobs_by_status}
 
 POST /api/v1/documents        multipart: file, category (optional: "sec_filing")
                                -> 202 {document_id, job_id, status: "pending"}

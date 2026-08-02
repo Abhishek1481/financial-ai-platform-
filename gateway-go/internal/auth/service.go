@@ -99,3 +99,12 @@ func (s *Service) Login(ctx context.Context, email, password string) (string, ti
 	}
 	return s.tokens.Generate(user)
 }
+
+// ListUsers powers the admin dashboard's user listing (Phase 15) — an
+// admin-only capability, gated by RBAC at the handler layer
+// (RequireRole), not here: Service methods trust their caller the same
+// way DocumentRepository/JobRepository do, since the HTTP transport layer
+// is where "is this caller allowed to call this" is decided.
+func (s *Service) ListUsers(ctx context.Context) ([]User, error) {
+	return s.repo.ListAll(ctx)
+}
