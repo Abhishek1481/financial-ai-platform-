@@ -17,6 +17,7 @@ import (
 
 	commonv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/common/v1"
 	embeddingsv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/embeddings/v1"
+	evaluationv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/evaluation/v1"
 	ingestionv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/ingestion/v1"
 	ragv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/rag/v1"
 	searchv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/search/v1"
@@ -24,6 +25,7 @@ import (
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/auth"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/config"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/conversation"
+	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/evaluation"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/health"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/ingestion"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/mlclient"
@@ -149,6 +151,26 @@ func (f *fakeAnswerer) Summarize(
 	}, nil
 }
 
+// fakeEvaluator is fakeSearcher's counterpart for evaluation.Evaluator.
+type fakeEvaluator struct {
+	respFn func(question, answer string, contextTexts []string, groundTruthAnswer string) (
+		*evaluationv1.EvaluateAnswerResponse, error,
+	)
+}
+
+func (f *fakeEvaluator) EvaluateAnswer(
+	ctx context.Context, question, answer string, contextTexts []string, groundTruthAnswer string,
+) (*evaluationv1.EvaluateAnswerResponse, error) {
+	if f.respFn != nil {
+		return f.respFn(question, answer, contextTexts, groundTruthAnswer)
+	}
+	return &evaluationv1.EvaluateAnswerResponse{
+		Faithfulness:     0.9,
+		ContextPrecision: 0.8,
+		AnswerRelevancy:  0.7,
+	}, nil
+}
+
 // startTestServer binds both listeners on ephemeral (":0") ports, starts
 // serving in the background, and registers cleanup to shut the server down
 // — mirrors the build/start split ml-service's Python test suite uses for
@@ -171,6 +193,26 @@ func startTestServerWithMLDeps(
 	embedder ingestion.Embedder,
 	searcher search.Searcher,
 	answerer rag.Answerer,
+) *Server {
+	t.Helper()
+	return startTestServerFull(t, extractor, embedder, searcher, answerer, &fakeEvaluator{})
+}
+
+// startTestServerWithEvaluator is startTestServerWithMLDeps's counterpart
+// for tests that need to customize evaluation.Evaluator specifically —
+// everything else gets the same default fakes as startTestServer.
+func startTestServerWithEvaluator(t *testing.T, evaluator evaluation.Evaluator) *Server {
+	t.Helper()
+	return startTestServerFull(t, &fakeExtractor{}, &fakeEmbedder{}, &fakeSearcher{}, &fakeAnswerer{}, evaluator)
+}
+
+func startTestServerFull(
+	t *testing.T,
+	extractor ingestion.Extractor,
+	embedder ingestion.Embedder,
+	searcher search.Searcher,
+	answerer rag.Answerer,
+	evaluator evaluation.Evaluator,
 ) *Server {
 	t.Helper()
 
@@ -218,6 +260,7 @@ func startTestServerWithMLDeps(
 		Searcher:      searcher,
 		Answerer:      answerer,
 		Conversations: conversation.NewMemoryStore(),
+		Evaluator:     evaluator,
 	})
 	if err := server.Listen(); err != nil {
 		t.Fatalf("Listen() failed: %v", err)
@@ -1182,6 +1225,87 @@ func TestRAGQuery_ExplicitHistoryOverridesStoredSession(t *testing.T) {
 	}
 	if capturedHistories[0][0].GetContent() != "explicit turn" {
 		t.Errorf("history[0].content = %q, want explicit body history to win", capturedHistories[0][0].GetContent())
+	}
+}
+
+func TestAdminEvaluate_RequiresAdminRole(t *testing.T) {
+	server := startTestServer(t)
+	baseURL := "http://" + server.HTTPAddr()
+
+	registerResp := postJSON(t, baseURL+"/api/v1/auth/register", map[string]string{
+		"email":    "eval-user@test.local",
+		"password": "correct-horse-battery",
+	})
+	registerResp.Body.Close()
+	userToken := login(t, baseURL, "eval-user@test.local", "correct-horse-battery")
+
+	resp := postJSONWithToken(t, baseURL+"/api/v1/admin/evaluate", userToken, map[string]string{
+		"question": "q", "answer": "a",
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusForbidden)
+	}
+}
+
+func TestAdminEvaluate_MissingFieldsIsRejected(t *testing.T) {
+	server := startTestServer(t)
+	baseURL := "http://" + server.HTTPAddr()
+	adminToken := login(t, baseURL, testAdminEmail, testAdminPassword)
+
+	resp := postJSONWithToken(t, baseURL+"/api/v1/admin/evaluate", adminToken, map[string]string{
+		"question": "q",
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusBadRequest)
+	}
+}
+
+func TestAdminEvaluate_ReturnsScoresFromEvaluator(t *testing.T) {
+	evaluator := &fakeEvaluator{
+		respFn: func(question, answer string, contextTexts []string, groundTruthAnswer string) (
+			*evaluationv1.EvaluateAnswerResponse, error,
+		) {
+			if question != "How did revenue grow?" || answer != "Revenue grew 18%. [1]" {
+				t.Errorf("unexpected question/answer: %q / %q", question, answer)
+			}
+			if len(contextTexts) != 1 || contextTexts[0] != "Revenue grew 18% year over year." {
+				t.Errorf("unexpected context: %v", contextTexts)
+			}
+			return &evaluationv1.EvaluateAnswerResponse{
+				Faithfulness:       1.0,
+				ContextPrecision:   0.5,
+				ContextRecall:      0.0,
+				HallucinationScore: 0.0,
+				AnswerRelevancy:    0.8,
+			}, nil
+		},
+	}
+	server := startTestServerWithEvaluator(t, evaluator)
+	baseURL := "http://" + server.HTTPAddr()
+	adminToken := login(t, baseURL, testAdminEmail, testAdminPassword)
+
+	resp := postJSONWithToken(t, baseURL+"/api/v1/admin/evaluate", adminToken, map[string]any{
+		"question": "How did revenue grow?",
+		"answer":   "Revenue grew 18%. [1]",
+		"context":  []string{"Revenue grew 18% year over year."},
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	var body struct {
+		Faithfulness     float32 `json:"faithfulness"`
+		ContextPrecision float32 `json:"context_precision"`
+		AnswerRelevancy  float32 `json:"answer_relevancy"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("invalid response: %v", err)
+	}
+	if body.Faithfulness != 1.0 || body.ContextPrecision != 0.5 || body.AnswerRelevancy != 0.8 {
+		t.Errorf("unexpected body: %+v", body)
 	}
 }
 

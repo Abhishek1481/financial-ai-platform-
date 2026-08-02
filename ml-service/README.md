@@ -7,7 +7,7 @@ summarization, and model evaluation. It has **no public HTTP port** —
 [`/proto`](../proto) for the contracts and [`/docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md)
 for why the boundary is drawn this way).
 
-## Status (Phase 10)
+## Status (Phase 12)
 
 Phase 3 built the skeleton: every RPC from every service in `/proto` is
 registered and reachable, the standard gRPC health-checking and reflection
@@ -109,6 +109,30 @@ through `GET /api/v1/documents/:id/summary?type=...`, and confirmed each
 citation resolved back to the uploaded document's own chunk; also
 confirmed an unknown document ID returns 404 through the full gRPC
 NOT_FOUND -> HTTP path.
+
+Phase 12 fills in `EvaluationService`: `EvaluateAnswer` (unary, one
+question/answer/context triple) and `BatchEvaluate` (client-streaming,
+aggregate statistics over many). The standard implementation of these
+RAGAS-style metrics (faithfulness, context precision/recall,
+hallucination, answer relevancy) uses an LLM as a judge — not available
+as a *scoring* dependency here any more than as a *generation* one (no
+API key in this environment; see `app/rag/llm_client.py`). Rather than
+stub evaluation out, `app/evaluation/metrics.py` computes all five via
+deterministic lexical overlap: split into sentences, tokenize, and
+measure token-set overlap between an answer's claims and the retrieved
+context — the same "token-overlap gate" reasoning
+`app/search/keyword_index.py` already uses for BM25+ relevance
+filtering, plus trusting a valid `[N]` citation marker outright. This is
+a real, independently useful algorithm, not a placeholder for the
+LLM-judged version — swapping one in later is adding a second scorer
+behind the same interface, not a rewrite.
+
+Verified end-to-end against a live `gateway-go` + `ml-service` pair via
+the new admin-only `POST /api/v1/admin/evaluate`: a lexically-grounded
+answer scored `faithfulness=1.0, hallucination_score=0.0`, and a
+fabricated answer over the same context scored `faithfulness=0.0,
+hallucination_score=1.0` — the scoring genuinely discriminates, not just
+plumbing that always returns the same numbers.
 
 ## Setup
 
@@ -224,14 +248,17 @@ concurrent RPCs on one event loop instead of needing a large thread pool —
 the same reasoning that justifies async frameworks on the Python web side,
 applied to gRPC.
 
-## Why every service registers even though most RPCs abort
+## Why every service registered before every RPC was implemented
 
-An alternative would be to add each `ingestion_pb2_grpc.add_..._to_server()`
-call only once that service's phase lands. That produces a smaller diff per
+An alternative would have been to add each `ingestion_pb2_grpc.add_..._to_server()`
+call only once that service's phase landed. That produces a smaller diff per
 phase but means the server's reflection output, health-check surface, and
 overall shape change on every phase — which makes it harder to build
 `gateway-go`'s client code against a stable target, and harder to write
 integration tests that assert "these five services exist" independent of
-which RPCs on them are implemented. Registering the full surface now and
-filling in bodies later trades a slightly bigger Phase 3 for a much smaller
-diff on every phase after it.
+which RPCs on them are implemented. Registering the full surface in Phase 3
+and filling in bodies through Phase 12 traded a slightly bigger Phase 3 for
+a much smaller diff on every phase after it — as of Phase 12, every RPC on
+every registered service is real; `test_server.py`'s health-check smoke
+tests are what's left of that scaffolding-era test surface (see its module
+docstring for the history of what used to be tested there).

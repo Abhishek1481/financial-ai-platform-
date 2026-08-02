@@ -6,7 +6,7 @@ streaming, caching (later phases) — never ML/NLP itself, which is
 `ml-service`'s job exclusively (see [`/docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md)
 for why the boundary is drawn this way).
 
-## Status (Phase 11)
+## Status (Phase 12)
 
 Phase 4 built the skeleton (HTTP lifecycle, logging, health/metrics).
 Phase 5 added JWT auth and RBAC. Phase 6 added document ingestion: upload,
@@ -36,13 +36,22 @@ automatically so a caller doesn't have to resend the whole transcript on
 every follow-up, and the question/answer are appended back once the
 answer finishes. Explicitly supplying `history` in the request body still
 overrides this (the stateless mode Phase 9 shipped), for callers that
-prefer to manage their own transcript.
+prefer to manage their own transcript. Phase 12 adds
+`POST /api/v1/admin/evaluate`, an admin-only spot-check onto
+`EvaluationService.EvaluateAnswer` through a new `internal/evaluation.Evaluator`
+interface — the same thin-wrapper pattern as `search.Searcher`/`rag.Answerer`.
+`EvaluationService.BatchEvaluate` (client-streaming, for CI eval-regression
+gates) has no gateway-go caller — it's driven directly over gRPC by the CI
+pipeline landing in Phase 19, not something an HTTP client calls.
 
 ```
 POST /api/v1/auth/register   {email, password} -> 201 {id, email, role}   (always role "user")
 POST /api/v1/auth/login      {email, password} -> 200 {access_token, token_type, expires_in}
 GET  /api/v1/me               Bearer token      -> 200 {id, email, role}
 GET  /api/v1/admin/ping       Bearer token, admin role only -> 200 {message}
+POST /api/v1/admin/evaluate   Bearer token, admin role only, body: {question, answer, context?, ground_truth_answer?}
+                               -> 200 {faithfulness, context_precision, context_recall,
+                                        hallucination_score, answer_relevancy}
 
 POST /api/v1/documents        multipart: file, category (optional: "sec_filing")
                                -> 202 {document_id, job_id, status: "pending"}
@@ -131,6 +140,7 @@ gateway-go/
 │   ├── search/                   Searcher interface over SearchService
 │   ├── rag/                       Answerer interface over RAGService (streaming)
 │   ├── conversation/               session_id-keyed conversation memory (in-memory Store)
+│   ├── evaluation/                 Evaluator interface over EvaluationService
 │   ├── handlers/                /healthz, /api/v1/auth/*, /api/v1/me, /api/v1/admin/*, /api/v1/documents*, /api/v1/search, /api/v1/rag/query
 │   ├── metrics/                 Prometheus middleware + /metrics handler
 │   ├── middleware/              structured request logging, panic recovery

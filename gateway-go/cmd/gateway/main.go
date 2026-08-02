@@ -95,6 +95,7 @@ func main() {
 		Searcher:      mlClient,
 		Answerer:      mlClient,
 		Conversations: conversation.NewMemoryStore(),
+		Evaluator:     mlClient,
 	})
 	if err := server.Listen(); err != nil {
 		logger.Error("failed to bind listeners", "error", err)

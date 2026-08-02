@@ -19,6 +19,7 @@ func registerRoutes(engine *gin.Engine, deps Dependencies, maxUploadBytes int64)
 	documentHandlers := handlers.NewDocumentHandlers(deps.Ingestion, maxUploadBytes)
 	searchHandlers := handlers.NewSearchHandlers(deps.Searcher)
 	ragHandlers := handlers.NewRAGHandlers(deps.Answerer, deps.Conversations)
+	adminHandlers := handlers.NewAdminHandlers(deps.Evaluator)
 
 	v1 := engine.Group("/api/v1")
 
@@ -37,10 +38,12 @@ func registerRoutes(engine *gin.Engine, deps Dependencies, maxUploadBytes int64)
 	v1.GET("/search", authMW.Authenticate(), searchHandlers.Search)
 	v1.POST("/rag/query", authMW.Authenticate(), ragHandlers.Query)
 
-	// Placeholder route proving RBAC actually gates access end-to-end;
-	// real admin endpoints (documents/users/jobs/metrics) arrive in
-	// Phase 15.
+	// /ping is a placeholder proving RBAC actually gates access end-to-end;
+	// full admin endpoints (documents/users/jobs/metrics) arrive in Phase
+	// 15 — /evaluate (Phase 12) is the first real one, ahead of that,
+	// since answer-quality spot-checking is naturally an admin action.
 	admin := v1.Group("/admin")
 	admin.Use(authMW.Authenticate(), authMW.RequireRole(auth.RoleAdmin))
 	admin.GET("/ping", handlers.AdminPing)
+	admin.POST("/evaluate", adminHandlers.EvaluateAnswer)
 }

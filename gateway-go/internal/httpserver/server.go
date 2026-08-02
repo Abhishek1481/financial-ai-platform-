@@ -16,6 +16,7 @@ import (
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/auth"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/config"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/conversation"
+	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/evaluation"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/health"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/ingestion"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/metrics"
@@ -37,6 +38,7 @@ type Dependencies struct {
 	Searcher      search.Searcher
 	Answerer      rag.Answerer
 	Conversations conversation.Store
+	Evaluator     evaluation.Evaluator
 }
 
 // Server owns the public API listener and the internal metrics listener.

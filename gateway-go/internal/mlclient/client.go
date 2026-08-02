@@ -17,6 +17,7 @@ import (
 
 	commonv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/common/v1"
 	embeddingsv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/embeddings/v1"
+	evaluationv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/evaluation/v1"
 	ingestionv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/ingestion/v1"
 	ragv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/rag/v1"
 	searchv1 "github.com/Abhishek1481/financial-ai-platform/proto/gen/go/search/v1"
@@ -32,6 +33,7 @@ type Client struct {
 	embeddings embeddingsv1.EmbeddingServiceClient
 	search     searchv1.SearchServiceClient
 	rag        ragv1.RAGServiceClient
+	evaluation evaluationv1.EvaluationServiceClient
 	health     grpc_health_v1.HealthClient
 }
 
@@ -56,6 +58,7 @@ func NewClient(addr string) (*Client, error) {
 		embeddings: embeddingsv1.NewEmbeddingServiceClient(conn),
 		search:     searchv1.NewSearchServiceClient(conn),
 		rag:        ragv1.NewRAGServiceClient(conn),
+		evaluation: evaluationv1.NewEvaluationServiceClient(conn),
 		health:     grpc_health_v1.NewHealthClient(conn),
 	}, nil
 }
@@ -222,6 +225,36 @@ func (c *Client) Summarize(
 	})
 	if err != nil {
 		return nil, fmt.Errorf("mlclient: Summarize: %w", err)
+	}
+	return resp, nil
+}
+
+// EvaluateAnswer asks ml-service to score a single question/answer/context
+// triple (faithfulness, context precision/recall, hallucination, answer
+// relevancy — see proto/evaluation/v1/evaluation.proto). Unary, for
+// on-demand spot-checks; BatchEvaluate (client-streaming, for offline
+// eval-regression gates) has no Go-side caller yet — that lands with the
+// CI pipeline in Phase 19, which drives it directly over gRPC rather than
+// through gateway-go.
+func (c *Client) EvaluateAnswer(
+	ctx context.Context,
+	question, answer string,
+	contextTexts []string,
+	groundTruthAnswer string,
+) (*evaluationv1.EvaluateAnswerResponse, error) {
+	retrievedContext := make([]*commonv1.Chunk, 0, len(contextTexts))
+	for _, text := range contextTexts {
+		retrievedContext = append(retrievedContext, &commonv1.Chunk{Text: text})
+	}
+
+	resp, err := c.evaluation.EvaluateAnswer(ctx, &evaluationv1.EvaluateAnswerRequest{
+		Question:          question,
+		Answer:            answer,
+		RetrievedContext:  retrievedContext,
+		GroundTruthAnswer: groundTruthAnswer,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("mlclient: EvaluateAnswer: %w", err)
 	}
 	return resp, nil
 }

@@ -29,7 +29,7 @@ it's clear what's real vs. planned at any point in time.
       sentiment summaries.
 - [x] **Phase 11 — Conversational QA.** Context-aware follow-up questions,
       conversation memory.
-- [ ] **Phase 12 — Model evaluation.** Precision/recall, faithfulness,
+- [x] **Phase 12 — Model evaluation.** Precision/recall, faithfulness,
       context recall, hallucination detection, latency/token tracking.
 - [ ] **Phase 13 — Caching, rate limiting, scheduler.** Redis cache, rate
       limiter, job scheduler, worker pool in Go.
