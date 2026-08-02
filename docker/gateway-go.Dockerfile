@@ -21,6 +21,7 @@ RUN go install google.golang.org/protobuf/cmd/protoc-gen-go@latest \
 ENV PATH="/root/go/bin:${PATH}"
 WORKDIR /workspace
 COPY proto/ proto/
+RUN mkdir -p proto/gen/go
 RUN python3 -m venv /tmp/protoc-venv \
     && /tmp/protoc-venv/bin/pip install --no-cache-dir grpcio-tools \
     && /tmp/protoc-venv/bin/python -m grpc_tools.protoc \

@@ -189,6 +189,20 @@ verification (`docker-build.yml`, `k8s-validate.yml`,
 specifically to close a gap this development environment couldn't close
 on its own, not as generic CI boilerplate.
 
+**A gap in that story, found and fixed rather than left implicit**:
+`docker-build.yml` runs on every push, and it turned out `ml-service.Dockerfile`
+had the identical missing-output-directory bug as `make proto-python` (see
+above) — `proto/gen/python` doesn't exist in the build context either,
+for the same reason. It was masked for the same reason: never actually
+checked after being written. `terraform-validate.yml` and
+`k8s-validate.yml` are narrower still — both are path-filtered to their
+own directory (`terraform/**`, `k8s/**`), and since no commit has touched
+either path since Phase 19 added the workflows, **neither has executed
+even once**. Both now carry a `workflow_dispatch` trigger so they can be
+run on demand without waiting for an unrelated Terraform/K8s change —
+worth running once before trusting either validation claim at face
+value.
+
 ## If I were extending this next
 
 In roughly the order they'd matter for a team actually running this in

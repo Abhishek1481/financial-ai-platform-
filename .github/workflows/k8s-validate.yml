@@ -14,6 +14,9 @@ on:
     paths: ["k8s/**"]
   pull_request:
     paths: ["k8s/**"]
+  # Lets this be run on demand even when no k8s/** file changed — e.g. to
+  # get a first real validation pass after the workflow itself was added.
+  workflow_dispatch: {}
 
 concurrency:
   group: k8s-validate-${{ github.workflow }}-${{ github.ref }}

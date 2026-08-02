@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from itertools import pairwise
+
 import pytest
 from app.embeddings.chunking import Chunker
 
@@ -79,7 +81,7 @@ class TestChunker_Overlap:
 
         # The start of each chunk after the first should contain some
         # trailing words from the previous chunk, not begin cold.
-        for prev, cur in zip(chunks, chunks[1:]):
+        for prev, cur in pairwise(chunks):
             prev_tail_words = prev.text.split()[-3:]
             assert any(word in cur.text.split()[:6] for word in prev_tail_words)
 

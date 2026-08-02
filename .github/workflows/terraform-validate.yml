@@ -14,6 +14,10 @@ on:
     paths: ["terraform/**"]
   pull_request:
     paths: ["terraform/**"]
+  # Lets this be run on demand even when no terraform/** file changed —
+  # e.g. to get a first real validation pass after the workflow itself
+  # was added, or to re-check after a Terraform provider/module release.
+  workflow_dispatch: {}
 
 concurrency:
   group: terraform-validate-${{ github.workflow }}-${{ github.ref }}

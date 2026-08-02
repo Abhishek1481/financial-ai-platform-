@@ -13,6 +13,7 @@ FROM python:3.12-slim AS proto-gen
 WORKDIR /workspace
 RUN pip install --no-cache-dir grpcio-tools
 COPY proto/ proto/
+RUN mkdir -p proto/gen/python
 RUN python -m grpc_tools.protoc \
       -I proto \
       --python_out=proto/gen/python \

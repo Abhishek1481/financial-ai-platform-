@@ -17,8 +17,10 @@ def make_pdf_bytes(text: str = "Hello World") -> bytes:
     objects = [
         b"<</Type/Catalog/Pages 2 0 R>>",
         b"<</Type/Pages/Kids[3 0 R]/Count 1>>",
-        b"<</Type/Page/Parent 2 0 R/Resources<</Font<</F1 5 0 R>>>>"
-        b"/MediaBox[0 0 612 792]/Contents 4 0 R>>",
+        (
+            b"<</Type/Page/Parent 2 0 R/Resources<</Font<</F1 5 0 R>>>>"
+            b"/MediaBox[0 0 612 792]/Contents 4 0 R>>"
+        ),
         b"<</Length "
         + str(len(content)).encode()
         + b">>\nstream\n"

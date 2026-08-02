@@ -39,6 +39,7 @@ jobs:
           python-version: "3.12"
       - name: Install ml-service's full resolved dependency tree
         run: |
+          python -m pip install --no-cache-dir --upgrade pip
           cd ml-service
           pip install --no-cache-dir .
       - name: Audit the installed environment
