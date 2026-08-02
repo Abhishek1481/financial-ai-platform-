@@ -1,0 +1,11 @@
+# Auto-loads every dashboard JSON file mounted into this container's
+# /var/lib/grafana/dashboards — currently just docs/monitoring's one
+# (see docker-compose.yml's grafana service volumes).
+apiVersion: 1
+
+providers:
+  - name: default
+    folder: ""
+    type: file
+    options:
+      path: /var/lib/grafana/dashboards

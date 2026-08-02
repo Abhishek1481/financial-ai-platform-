@@ -1,0 +1,136 @@
+# Full local stack (Phase 16) — gateway-go, ml-service, and the
+# infrastructure they use: Redis (search cache + conversation memory,
+# genuinely wired — see gateway-go/internal/cache/redis_cache.go and
+# internal/conversation/redis_store.go), Postgres (provisioned for the
+# Postgres-backed repositories that are the natural next step once the
+# in-memory ones need to survive a restart or be shared across replicas —
+# not wired into gateway-go yet, so nothing connects to it today), and
+# Prometheus + Grafana (Phase 14's monitoring, using the exact configs in
+# docs/monitoring/).
+#
+# NOTE: authored and reviewed carefully, but not build/run-verified in
+# this development environment (no Docker daemon available here) — the
+# same "fully wired, unverified in this sandbox" honesty this project
+# applies elsewhere (see ml-service/app/rag/llm_client.py's
+# LangChainLLMClient) applies to this file too. `docker compose up --build`
+# is the first thing to run wherever Docker is actually available.
+#
+# Run:
+#   docker compose up --build
+# gateway-go: http://localhost:8080  ·  Grafana: http://localhost:3000 (admin/admin)
+# Prometheus: http://localhost:9090  ·  gateway-go metrics: http://localhost:9091/metrics
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: financial_ai_platform
+      POSTGRES_USER: financial_ai_platform
+      POSTGRES_PASSWORD: financial_ai_platform_dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U financial_ai_platform"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  ml-service:
+    build:
+      context: .
+      dockerfile: docker/ml-service.Dockerfile
+    environment:
+      ML_SERVICE_ENVIRONMENT: development
+      ML_SERVICE_GRPC_HOST: 0.0.0.0
+      ML_SERVICE_GRPC_PORT: "50051"
+      ML_SERVICE_METRICS_PORT: "9091"
+      ML_SERVICE_LOG_LEVEL: info
+      ML_SERVICE_VECTOR_STORE_DIR: /data/vector-store
+      # No LLM API key is available in this environment (see
+      # ml-service/app/rag/llm_client.py) — "fake" is the honest default
+      # here too; set ML_SERVICE_LLM_PROVIDER=openai|anthropic and
+      # ML_SERVICE_LLM_API_KEY via a real .env to turn on live generation.
+      ML_SERVICE_LLM_PROVIDER: fake
+    ports:
+      - "50051:50051"
+      - "9091:9091"
+    volumes:
+      - ml-service-vector-store:/data/vector-store
+
+  gateway-go:
+    build:
+      context: .
+      dockerfile: docker/gateway-go.Dockerfile
+    depends_on:
+      ml-service:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    environment:
+      GATEWAY_ENVIRONMENT: development
+      GATEWAY_HTTP_HOST: 0.0.0.0
+      GATEWAY_HTTP_PORT: "8080"
+      GATEWAY_METRICS_HOST: 0.0.0.0
+      GATEWAY_METRICS_PORT: "9090"
+      GATEWAY_LOG_LEVEL: info
+      GATEWAY_ML_SERVICE_ADDR: "ml-service:50051"
+      GATEWAY_REDIS_ADDR: "redis:6379"
+      GATEWAY_STORAGE_DIR: /data/documents
+      # Insecure defaults — fine for this local stack, never for a real
+      # deployment (see internal/config's doc comment; Load() itself
+      # refuses these in GATEWAY_ENVIRONMENT=production).
+      GATEWAY_JWT_SECRET: dev-insecure-secret-change-me
+      GATEWAY_ADMIN_EMAIL: admin@example.com
+      GATEWAY_ADMIN_PASSWORD: dev-insecure-admin-change-me
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    volumes:
+      - gateway-go-documents:/data/documents
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./docs/monitoring/prometheus.compose.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9092:9090"
+    depends_on:
+      - gateway-go
+      - ml-service
+
+  grafana:
+    image: grafana/grafana:latest
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docs/monitoring/grafana-dashboard.json:/var/lib/grafana/dashboards/financial-ai-platform.json:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+
+volumes:
+  redis-data:
+  postgres-data:
+  ml-service-vector-store:
+  gateway-go-documents:
+  prometheus-data:
+  grafana-data:

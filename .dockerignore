@@ -1,0 +1,31 @@
+# Keeps build context small and Docker's layer cache useful — the
+# Dockerfiles COPY only what they actually need (proto/, gateway-go/,
+# ml-service/pyproject.toml + app/), so none of this ever needs to reach
+# the build context at all.
+
+.git/
+.github/
+
+**/__pycache__/
+**/*.pyc
+ml-service/.venv/
+ml-service/venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+gateway-go/bin/
+**/*.exe
+**/*.test
+
+# Generated protobuf — each Dockerfile's proto-gen stage regenerates these
+# itself (see /proto/README.md); a stale local copy should never leak into
+# a build.
+proto/gen/**/*.pb.go
+proto/gen/**/*_pb2.py
+proto/gen/**/*_pb2.pyi
+proto/gen/**/*_pb2_grpc.py
+
+# Local-dev data volumes / uploaded files — never belongs in an image.
+**/data/

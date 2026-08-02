@@ -1,0 +1,16 @@
+# Prometheus scrape config for the Docker Compose stack (see
+# /docker-compose.yml's prometheus service) — targets the Compose network's
+# service names, not localhost. For scraping locally-running (non-Docker)
+# processes during development, use prometheus.yml in this same directory
+# instead.
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: gateway-go
+    static_configs:
+      - targets: ["gateway-go:9090"]
+
+  - job_name: ml-service
+    static_configs:
+      - targets: ["ml-service:9091"]

@@ -84,6 +84,15 @@ type Config struct {
 	// cmd/gateway/main.go.
 	ConversationPruneInterval time.Duration
 	ConversationMaxAge        time.Duration
+
+	// RedisAddr switches internal/cache and internal/conversation from
+	// their in-memory implementations to Redis-backed ones (see
+	// cmd/gateway/main.go) — empty (the default) keeps everything
+	// in-process, which is what every environment without a `redis`
+	// container reachable at this address should use. Set by Docker
+	// Compose's gateway-go service (Phase 16) to the `redis` service's
+	// hostname.
+	RedisAddr string
 }
 
 const (
@@ -107,6 +116,7 @@ func Load() (Config, error) {
 		AdminPassword:   getEnv("GATEWAY_ADMIN_PASSWORD", InsecureDefaultAdminPassword),
 		MLServiceAddr:   getEnv("GATEWAY_ML_SERVICE_ADDR", "localhost:50051"),
 		StorageDir:      getEnv("GATEWAY_STORAGE_DIR", "./data/documents"),
+		RedisAddr:       getEnv("GATEWAY_REDIS_ADDR", ""),
 	}
 
 	var err error

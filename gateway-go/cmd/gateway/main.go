@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/redis/go-redis/v9"
+
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/auth"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/cache"
 	"github.com/Abhishek1481/financial-ai-platform/gateway-go/internal/config"
@@ -90,15 +92,36 @@ func main() {
 	defer cancelWorkers()
 	ingestionService.Start(workerCtx)
 
-	conversations := conversation.NewMemoryStore()
-	// Garbage-collects sessions nobody has returned to — without this, an
-	// abandoned session sits in memory for the life of the process (see
-	// conversation.MemoryStore.PruneOlderThan's doc comment).
-	go scheduler.Run(workerCtx, cfg.ConversationPruneInterval, func(ctx context.Context) {
-		if pruned := conversations.PruneOlderThan(time.Now().Add(-cfg.ConversationMaxAge)); pruned > 0 {
-			logger.Info("pruned stale conversation sessions", "count", pruned)
-		}
-	})
+	// RedisAddr set (Docker Compose's gateway-go service sets it to the
+	// `redis` container's hostname; Phase 16) switches both the search
+	// cache and conversation memory to Redis-backed implementations —
+	// unset (every other environment, including this one) keeps them
+	// in-process. See internal/cache/redis_cache.go and
+	// internal/conversation/redis_store.go for why these are genuinely
+	// tested (against miniredis) despite no live Redis being reachable
+	// here to smoke-test this branch itself.
+	var conversations conversation.Store
+	var searchCache cache.Cache
+	if cfg.RedisAddr != "" {
+		redisClient := redis.NewClient(&redis.Options{Addr: cfg.RedisAddr})
+		conversations = conversation.NewRedisStore(redisClient, cfg.ConversationMaxAge)
+		searchCache = cache.NewRedisCache(redisClient)
+		logger.Info("using Redis-backed cache and conversation store", "redis_addr", cfg.RedisAddr)
+	} else {
+		memStore := conversation.NewMemoryStore()
+		conversations = memStore
+		searchCache = cache.NewMemoryCache()
+		// Garbage-collects sessions nobody has returned to — without
+		// this, an abandoned session sits in memory for the life of the
+		// process (see conversation.MemoryStore.PruneOlderThan's doc
+		// comment). RedisStore needs no equivalent — Redis expires each
+		// session key natively via TTL.
+		go scheduler.Run(workerCtx, cfg.ConversationPruneInterval, func(ctx context.Context) {
+			if pruned := memStore.PruneOlderThan(time.Now().Add(-cfg.ConversationMaxAge)); pruned > 0 {
+				logger.Info("pruned stale conversation sessions", "count", pruned)
+			}
+		})
+	}
 
 	server := httpserver.New(cfg, logger, httpserver.Dependencies{
 		Readiness:      readiness,
@@ -109,7 +132,7 @@ func main() {
 		Answerer:       mlClient,
 		Conversations:  conversations,
 		Evaluator:      mlClient,
-		Cache:          cache.NewMemoryCache(),
+		Cache:          searchCache,
 		SearchCacheTTL: cfg.SearchCacheTTL,
 		RateLimiter:    ratelimit.New(cfg.RateLimitRPS, cfg.RateLimitBurst),
 	})

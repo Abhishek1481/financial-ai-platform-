@@ -6,7 +6,7 @@ streaming, caching (later phases) — never ML/NLP itself, which is
 `ml-service`'s job exclusively (see [`/docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md)
 for why the boundary is drawn this way).
 
-## Status (Phase 15)
+## Status (Phase 16)
 
 Phase 4 built the skeleton (HTTP lifecycle, logging, health/metrics).
 Phase 5 added JWT auth and RBAC. Phase 6 added document ingestion: upload,
@@ -77,6 +77,22 @@ tradeoff already exists (Postgres in Phase 16 is what actually needs
 pagination to matter). A dashboard *UI* (something a browser renders) is
 out of scope — this repo has no frontend framework in play; what this
 phase delivers is the API surface a UI would consume.
+
+Phase 16 adds the full local Docker Compose stack (`/docker-compose.yml`,
+`docker/gateway-go.Dockerfile`) — `redis` is genuinely wired: setting
+`GATEWAY_REDIS_ADDR` (Compose sets it automatically) switches
+`internal/cache.Cache` and `internal/conversation.Store` from their
+in-memory implementations to `RedisCache`/`RedisStore` with no other code
+change, both tested against `miniredis` (a pure-Go in-process Redis
+server — genuine client/server wire testing without needing a live Redis
+or Docker for `go test` itself to pass). `postgres` is provisioned in the
+stack but not yet consumed — the `Repository` interfaces
+(`auth.UserRepository`, `ingestion.{Document,Job}Repository`) are already
+the seam a Postgres-backed implementation slots into, that swap just
+hasn't happened yet. **Caveat**: this Dockerfile/Compose setup was
+authored and reviewed carefully but is unverified by an actual
+`docker compose up` — no Docker daemon is available in this development
+environment (see `docker/README.md`).
 
 ```
 POST /api/v1/auth/register   {email, password} -> 201 {id, email, role}   (always role "user")

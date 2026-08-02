@@ -1,0 +1,10 @@
+# Auto-provisions the Prometheus datasource so Grafana has something to
+# query the moment the stack comes up — no manual "Add data source" click.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
