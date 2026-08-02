@@ -1,0 +1,21 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: financial-ai-platform
+
+resources:
+  - namespace.yaml
+  - gateway-go-configmap.yaml
+  - gateway-go-secret.yaml
+  - gateway-go-deployment.yaml
+  - gateway-go-service.yaml
+  - gateway-go-hpa.yaml
+  - gateway-go-ingress.yaml
+  - ml-service-configmap.yaml
+  - ml-service-secret.yaml
+  - ml-service-deployment.yaml
+  - ml-service-service.yaml
+  - storage-pvc.yaml
+  - redis.yaml
+  - postgres-secret.yaml
+  - postgres.yaml

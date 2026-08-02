@@ -1,0 +1,29 @@
+# Exposes only gateway-go's public HTTP port — never ml-service (no
+# public HTTP surface at all, gRPC-only, see docs/ARCHITECTURE.md) and
+# never gateway-go's metrics port (9090 stays cluster-internal, scraped
+# via the prometheus.io/* pod annotations in gateway-go-deployment.yaml,
+# not routed here — see gateway-go/README.md's "Metrics on a separate
+# port from public traffic").
+#
+# host is a placeholder — replace with a real domain, and add `tls:` once
+# there's a cert-manager Issuer/ClusterIssuer in the cluster to reference.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gateway-go
+  namespace: financial-ai-platform
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "30m" # slightly above GATEWAY_MAX_UPLOAD_SIZE_MB's default so the ingress isn't the tightest limit
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: financial-ai-platform.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: gateway-go
+                port:
+                  name: http

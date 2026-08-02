@@ -1,0 +1,68 @@
+# A StatefulSet, not a Deployment — a database needs a stable identity
+# and its own dedicated volume per replica (volumeClaimTemplates below),
+# which is exactly what a Deployment + shared PVC can't provide
+# correctly. Single replica: no read-replica/failover story attempted
+# here, matching this manifest's actual purpose — Postgres is
+# provisioned for the future Repository migration, not yet load-bearing
+# (see k8s/README.md).
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: financial-ai-platform
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - name: postgres
+              containerPort: 5432
+          envFrom:
+            - secretRef:
+                name: postgres-secret
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "$(POSTGRES_USER)"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: postgres-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: financial-ai-platform
+spec:
+  clusterIP: None # headless — StatefulSet pods get stable DNS (postgres-0.postgres...) through this
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: postgres

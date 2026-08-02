@@ -1,0 +1,42 @@
+# documents-pvc: shared between gateway-go (writer, via LocalObjectStore)
+# and ml-service (reader, via the file:// URI ingestion.Service hands it —
+# see gateway-go/README.md's "Storage URIs, not bytes, cross the gRPC
+# boundary"). ReadWriteMany because gateway-go runs multiple replicas
+# (gateway-go-deployment.yaml) that all need to write into and be read
+# from the same filesystem — requires a StorageClass that actually
+# supports RWX (NFS, EFS, Azure Files, etc.); the default StorageClass on
+# many local clusters (kind, a stock minikube) does not, and this PVC
+# will sit Pending until one that does is available or `storageClassName`
+# below is set explicitly.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: documents-pvc
+  namespace: financial-ai-platform
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 20Gi
+
+---
+# vector-store-pvc: FaissVectorStore's on-disk index (see
+# ml-service/app/embeddings/vector_store.py) — ReadWriteOnce is
+# sufficient because ml-service-deployment.yaml deliberately runs a
+# single replica: FAISS is a local, non-distributed index with no
+# story for two processes writing the same file concurrently.
+# Horizontally scaling ml-service needs an OpenSearch-backed VectorStore
+# implementation first (the interface already anticipates this — see
+# that file's module docstring), not more replicas of this PVC.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: vector-store-pvc
+  namespace: financial-ai-platform
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi

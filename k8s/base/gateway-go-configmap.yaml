@@ -1,0 +1,31 @@
+# Non-secret configuration — same GATEWAY_* variable names as
+# gateway-go/.env.example (internal/config/config.go is the source of
+# truth). Secrets (JWT signing key, admin password, DB/Redis credentials
+# once Postgres is wired) live in gateway-go-secret.yaml instead, never
+# here.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gateway-go-config
+  namespace: financial-ai-platform
+data:
+  GATEWAY_ENVIRONMENT: "production"
+  GATEWAY_HTTP_HOST: "0.0.0.0"
+  GATEWAY_HTTP_PORT: "8080"
+  GATEWAY_METRICS_HOST: "0.0.0.0"
+  GATEWAY_METRICS_PORT: "9090"
+  GATEWAY_LOG_LEVEL: "info"
+  GATEWAY_SHUTDOWN_TIMEOUT: "10s"
+  GATEWAY_JWT_TTL: "1h"
+  GATEWAY_ADMIN_EMAIL: "admin@example.com"
+  GATEWAY_ML_SERVICE_ADDR: "ml-service:50051"
+  GATEWAY_REDIS_ADDR: "redis:6379"
+  GATEWAY_STORAGE_DIR: "/data/documents"
+  GATEWAY_MAX_UPLOAD_SIZE_MB: "25"
+  GATEWAY_INGESTION_WORKERS: "4"
+  GATEWAY_INGESTION_QUEUE_SIZE: "100"
+  GATEWAY_SEARCH_CACHE_TTL: "30s"
+  GATEWAY_RATE_LIMIT_RPS: "5"
+  GATEWAY_RATE_LIMIT_BURST: "10"
+  GATEWAY_CONVERSATION_PRUNE_INTERVAL: "10m"
+  GATEWAY_CONVERSATION_MAX_AGE: "24h"

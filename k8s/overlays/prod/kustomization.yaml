@@ -1,0 +1,36 @@
+# prod: base's Deployments/HPA/resource requests already represent a
+# real deployment's shape (2 gateway-go replicas, autoscaling, resource
+# limits) — what this overlay actually changes is what base can't know
+# ahead of time: the real image registry/tag and the real public
+# hostname (+ TLS, once a cert-manager Issuer exists in the target
+# cluster to reference).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+images:
+  - name: financial-ai-platform/gateway-go
+    newName: ghcr.io/abhishek1481/financial-ai-platform-gateway-go
+    newTag: latest # CI (Phase 19) overrides this to a commit SHA per deploy, not floating :latest
+  - name: financial-ai-platform/ml-service
+    newName: ghcr.io/abhishek1481/financial-ai-platform-ml-service
+    newTag: latest
+
+patches:
+  - target:
+      kind: Ingress
+      name: gateway-go
+    patch: |
+      - op: replace
+        path: /spec/rules/0/host
+        value: api.financial-ai-platform.example.com
+      - op: add
+        path: /spec/tls
+        value:
+          - hosts: ["api.financial-ai-platform.example.com"]
+            secretName: gateway-go-tls
+      - op: add
+        path: /metadata/annotations/cert-manager.io~1cluster-issuer
+        value: letsencrypt-prod

@@ -1,0 +1,83 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway-go
+  namespace: financial-ai-platform
+  labels:
+    app: gateway-go
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: gateway-go
+  template:
+    metadata:
+      labels:
+        app: gateway-go
+      annotations:
+        # Scraped in-cluster by Prometheus (kube-prometheus-stack or
+        # equivalent — not hand-rolled as k8s manifests here, same
+        # reasoning docker-compose.yml's prometheus service documents
+        # for why this repo's own config is the Compose-stack path, not
+        # the cluster path).
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: gateway-go
+          image: financial-ai-platform/gateway-go:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: metrics
+              containerPort: 9090
+          envFrom:
+            - configMapRef:
+                name: gateway-go-config
+            - secretRef:
+                name: gateway-go-secret
+          # /healthz never checks a downstream dependency (see
+          # gateway-go/README.md's design-decisions section) — exactly
+          # what a liveness probe should check: is this process itself
+          # still alive, not "is everything it depends on healthy."
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          # /readyz aggregates downstream checks (ml-service today) — a
+          # failing one pulls the pod out of the Service's endpoints
+          # without restarting it, unlike a failed liveness probe.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "64Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+          volumeMounts:
+            - name: documents
+              mountPath: /data/documents
+      volumes:
+        - name: documents
+          # Same PVC ml-service-deployment.yaml mounts at the same path —
+          # required because ingestion.Service hands ml-service a
+          # file:// URI, not the file's bytes (see
+          # gateway-go/README.md's "Storage URIs, not bytes, cross the
+          # gRPC boundary"), so both services need to see the identical
+          # filesystem regardless of which gateway-go replica (2 here)
+          # accepted a given upload. Needs a StorageClass that supports
+          # ReadWriteMany (NFS, EFS, Azure Files — not every cluster's
+          # default one does; this exact constraint is what S3/MinIO
+          # removes once LocalObjectStore is replaced).
+          persistentVolumeClaim:
+            claimName: documents-pvc

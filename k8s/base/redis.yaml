@@ -1,0 +1,61 @@
+# Genuinely used once GATEWAY_REDIS_ADDR is set (gateway-go-configmap.yaml
+# already points it at this Service) — see
+# gateway-go/internal/cache/redis_cache.go and
+# internal/conversation/redis_store.go. emptyDir, not a PVC: a cache/
+# session-store restart losing its data costs the next request a miss or
+# a re-sent conversation history, never a correctness bug (same reasoning
+# MemoryCache's own doc comment gives for why an in-process cache is fine
+# to lose on restart) — not worth a StorageClass dependency for that.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: financial-ai-platform
+  labels:
+    app: redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          ports:
+            - name: redis
+              containerPort: 6379
+          livenessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "250m"
+              memory: "256Mi"
+          volumeMounts:
+            - name: redis-data
+              mountPath: /data
+      volumes:
+        - name: redis-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: financial-ai-platform
+spec:
+  selector:
+    app: redis
+  ports:
+    - port: 6379
+      targetPort: redis

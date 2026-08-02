@@ -1,0 +1,31 @@
+# Non-secret configuration — same ML_SERVICE_* variable names as
+# ml-service/.env.example (app/config.py is the source of truth).
+# ML_SERVICE_LLM_API_KEY lives in ml-service-secret.yaml instead.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ml-service-config
+  namespace: financial-ai-platform
+data:
+  ML_SERVICE_ENVIRONMENT: "production"
+  ML_SERVICE_GRPC_HOST: "0.0.0.0"
+  ML_SERVICE_GRPC_PORT: "50051"
+  ML_SERVICE_LOG_LEVEL: "info"
+  # Reflection hands out the wire schema to anything that can reach the
+  # port — fine on a developer's machine, not across a cluster network
+  # boundary (see ml-service/README.md's Setup section for the dev-time
+  # reason it's on by default there).
+  ML_SERVICE_REFLECTION_ENABLED: "false"
+  ML_SERVICE_METRICS_PORT: "9091"
+  ML_SERVICE_EMBEDDING_MODEL_NAME: "sentence-transformers/all-MiniLM-L6-v2"
+  ML_SERVICE_EMBEDDING_DIMENSION: "384"
+  ML_SERVICE_VECTOR_STORE_DIR: "/data/vector-store"
+  # No LLM API key is available in this environment (see
+  # ml-service/app/rag/llm_client.py) — "fake" is the honest default here
+  # too. Set ML_SERVICE_LLM_PROVIDER to openai/anthropic and populate
+  # ml-service-secret.yaml's ML_SERVICE_LLM_API_KEY to activate live
+  # generation; no code or image change needed.
+  ML_SERVICE_LLM_PROVIDER: "fake"
+  ML_SERVICE_LLM_MODEL_NAME: "gpt-4o-mini"
+  ML_SERVICE_LLM_TEMPERATURE: "0.1"
+  ML_SERVICE_LLM_MAX_TOKENS: "1024"

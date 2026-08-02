@@ -1,0 +1,77 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ml-service
+  namespace: financial-ai-platform
+  labels:
+    app: ml-service
+spec:
+  # Single replica, deliberately — see storage-pvc.yaml's vector-store-pvc
+  # comment for why: FaissVectorStore is a local, non-distributed index,
+  # not something multiple ml-service processes can safely share or
+  # shard today. Scale up once an OpenSearch-backed VectorStore lands.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ml-service
+  template:
+    metadata:
+      labels:
+        app: ml-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9091"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: ml-service
+          image: financial-ai-platform/ml-service:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: grpc
+              containerPort: 50051
+            - name: metrics
+              containerPort: 9091
+          envFrom:
+            - configMapRef:
+                name: ml-service-config
+            - secretRef:
+                name: ml-service-secret
+          # Native gRPC probes (stable since k8s 1.27) hit the standard
+          # health service every registered service reports SERVING on
+          # (see app/server.py's build_server) — no sidecar binary
+          # (grpc_health_probe) needed.
+          livenessProbe:
+            grpc:
+              port: 50051
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            grpc:
+              port: 50051
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            # sentence-transformers (all-MiniLM-L6-v2) plus its torch/
+            # faiss-cpu dependencies need real headroom beyond what a
+            # typical gRPC service does — requests/limits sized for that
+            # model, not a generic default.
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "3Gi"
+          volumeMounts:
+            - name: documents
+              mountPath: /data/documents
+              readOnly: true
+            - name: vector-store
+              mountPath: /data/vector-store
+      volumes:
+        - name: documents
+          persistentVolumeClaim:
+            claimName: documents-pvc
+        - name: vector-store
+          persistentVolumeClaim:
+            claimName: vector-store-pvc

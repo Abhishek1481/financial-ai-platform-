@@ -1,0 +1,24 @@
+# Scales gateway-go on CPU only, deliberately — request handling here is
+# I/O-bound on ml-service far more than CPU-bound (same reasoning
+# ml-service/README.md gives for choosing grpc.aio), so CPU is a
+# reasonable-enough proxy without needing a custom metrics adapter
+# (queue depth, in-flight requests) this project doesn't have wired up.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: gateway-go
+  namespace: financial-ai-platform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: gateway-go
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

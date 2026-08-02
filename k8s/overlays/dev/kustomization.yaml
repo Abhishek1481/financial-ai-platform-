@@ -1,0 +1,65 @@
+# dev: a local cluster (kind/minikube) — lighter resource footprint,
+# verbose logging, and reflection back on (safe on a local-only cluster,
+# the same reason it defaults on for plain `python -m app.server` too;
+# base turns it off since base represents a real, network-reachable
+# deployment). JSON6902 patches throughout, deliberately, rather than a
+# configMapGenerator merge — avoids relying on kustomize's generator
+# hash-suffix + cross-base reference rewriting behaving as expected,
+# which isn't something that could be checked with an actual `kustomize
+# build` in this environment (see k8s/README.md's verification note).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+patches:
+  - target:
+      kind: ConfigMap
+      name: gateway-go-config
+    patch: |
+      - op: replace
+        path: /data/GATEWAY_ENVIRONMENT
+        value: development
+      - op: replace
+        path: /data/GATEWAY_LOG_LEVEL
+        value: debug
+  - target:
+      kind: ConfigMap
+      name: ml-service-config
+    patch: |
+      - op: replace
+        path: /data/ML_SERVICE_ENVIRONMENT
+        value: development
+      - op: replace
+        path: /data/ML_SERVICE_LOG_LEVEL
+        value: debug
+      - op: replace
+        path: /data/ML_SERVICE_REFLECTION_ENABLED
+        value: "true"
+  - target:
+      kind: Deployment
+      name: gateway-go
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 1
+      - op: replace
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests: { cpu: "50m", memory: "32Mi" }
+          limits: { cpu: "250m", memory: "128Mi" }
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: gateway-go
+    patch: |
+      - op: replace
+        path: /spec/minReplicas
+        value: 1
+  - target:
+      kind: Ingress
+      name: gateway-go
+    patch: |
+      - op: replace
+        path: /spec/rules/0/host
+        value: financial-ai-platform.localtest.me
