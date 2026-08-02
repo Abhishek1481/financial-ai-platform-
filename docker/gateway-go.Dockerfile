@@ -12,7 +12,7 @@
 # grpcio-tools' embedded protoc, which means even *Go* stub generation
 # needs a Python toolchain, not just the Go one — this stage installs
 # both rather than reinventing codegen a second way just to avoid that.
-FROM golang:1.25-bookworm AS proto-gen
+FROM golang:1.26-bookworm AS proto-gen
 RUN apt-get update && apt-get install -y --no-install-recommends \
       python3 python3-venv \
     && rm -rf /var/lib/apt/lists/*
@@ -36,7 +36,7 @@ RUN python3 -m venv /tmp/protoc-venv \
          proto/evaluation/v1/evaluation.proto
 
 # ---- build ----
-FROM golang:1.25-bookworm AS build
+FROM golang:1.26-bookworm AS build
 WORKDIR /workspace
 COPY proto/gen/go/go.mod proto/gen/go/go.sum proto/gen/go/
 COPY gateway-go/go.mod gateway-go/go.sum gateway-go/
