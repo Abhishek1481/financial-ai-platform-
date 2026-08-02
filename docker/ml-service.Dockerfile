@@ -9,7 +9,7 @@
 # ---- proto codegen ----
 # proto/gen/python is gitignored (generated, never committed — see
 # /proto/README.md).
-FROM python:3.12-slim AS proto-gen
+FROM python:3.14-slim AS proto-gen
 WORKDIR /workspace
 RUN pip install --no-cache-dir grpcio-tools
 COPY proto/ proto/
@@ -32,7 +32,7 @@ RUN python -m grpc_tools.protoc \
 # what actually runs (see runtime stage): a loose copy of app/ on disk,
 # not the pip-installed one, is what app/_bootstrap.py's repo-relative
 # path walk needs to line up with proto/gen/python's real location.
-FROM python:3.12-slim AS build
+FROM python:3.14-slim AS build
 WORKDIR /workspace/ml-service
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:${PATH}"
@@ -41,7 +41,7 @@ COPY ml-service/app app
 RUN pip install --no-cache-dir .
 
 # ---- runtime ----
-FROM python:3.12-slim AS runtime
+FROM python:3.14-slim AS runtime
 RUN useradd --create-home --uid 1000 mlservice
 COPY --from=build /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:${PATH}"
