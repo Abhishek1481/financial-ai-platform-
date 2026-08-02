@@ -92,3 +92,47 @@ jobs:
         run: |
           cd ml-service
           python -m pytest ../tests/unit/ml_service -v
+
+  integration:
+    name: cross-service integration (tests/integration)
+    runs-on: ubuntu-latest
+    # Only worth the extra minutes once the fast unit-level checks in
+    # both languages already pass — a real gateway-go + ml-service pair
+    # starting up is slower to fail on than a broken `go vet`/`ruff`.
+    needs: [gateway-go, ml-service]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: gateway-go/go.mod
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: ml-service/pyproject.toml
+
+      - name: Install protoc plugins
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Install ml-service and generate both proto stub sets
+        run: |
+          cd ml-service
+          pip install --no-cache-dir -e ".[dev]"
+          cd ..
+          make proto
+
+      # test_full_stack.py's fixture shells out to a bare `python` for
+      # ml-service — on this runner (unlike local development, which
+      # defaults to ml-service/.venv) that's whatever `setup-python` put
+      # on PATH, which already has ml-service installed into it above.
+      - name: Cross-service integration tests
+        env:
+          ML_SERVICE_PYTHON: python
+        run: |
+          cd ml-service
+          python -m pytest ../tests/integration -v

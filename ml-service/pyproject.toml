@@ -28,6 +28,8 @@ dev = [
     "pytest-asyncio>=0.24,<1",
     "ruff>=0.6,<1",
     "mypy>=1.11,<2",
+    "pytest-benchmark>=5.1,<6",
+    "requests>=2.31,<3", # tests/integration/test_full_stack.py's HTTP client — declared directly rather than relying on it arriving transitively via langchain
 ]
 
 [build-system]

@@ -43,7 +43,7 @@ it's clear what's real vs. planned at any point in time.
       CloudWatch).
 - [x] **Phase 19 — CI/CD.** GitHub Actions: test, lint, security scan,
       build, push, deploy.
-- [ ] **Phase 20 — Tests.** Unit, integration, API, load, benchmark.
+- [x] **Phase 20 — Tests.** Unit, integration, API, load, benchmark.
 - [ ] **Phase 21 — Docs polish.** Sequence diagrams, API/Swagger docs,
       deployment guide, interview explanation + design tradeoffs writeup.
 

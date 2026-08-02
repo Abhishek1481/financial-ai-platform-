@@ -7,7 +7,7 @@ summarization, and model evaluation. It has **no public HTTP port** —
 [`/proto`](../proto) for the contracts and [`/docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md)
 for why the boundary is drawn this way).
 
-## Status (Phase 14)
+## Status (Phase 20)
 
 Phase 3 built the skeleton: every RPC from every service in `/proto` is
 registered and reachable, the standard gRPC health-checking and reflection
@@ -153,6 +153,15 @@ one search request through the full HTTP -> gRPC path, both services'
 `/metrics` endpoints showed the matching call recorded exactly once on
 each side (`gateway_mlclient_requests_total` and
 `ml_service_grpc_requests_total`, same method, same status).
+
+Phases 15-19 (admin dashboard, Docker Compose, Kubernetes manifests,
+Terraform, CI/CD) were gateway-go/infrastructure-focused and didn't
+change this service's own code. Phase 20 (Tests) adds
+`tests/unit/ml_service/test_eval_gate.py` (the CI eval-regression gate
+promised in Phase 12's own status section, above) and
+`tests/benchmark/test_ml_service_benchmarks.py` (chunking, BM25 search,
+and evaluation scoring) — see `/tests/README.md` for the full picture
+across both services.
 
 ## Setup
 

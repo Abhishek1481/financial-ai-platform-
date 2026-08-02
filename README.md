@@ -67,7 +67,10 @@ what it actually validates:
 - **`ci.yml`** — `go build`/`vet`/`gofmt`/`test` for `gateway-go`;
   `ruff`/`mypy`/`pytest` for `ml-service`, including the CI eval-regression
   gate ([`tests/unit/ml_service/test_eval_gate.py`](tests/unit/ml_service/test_eval_gate.py))
-  promised back in Phase 12.
+  promised back in Phase 12; then a real cross-service `integration` job
+  ([`tests/integration/test_full_stack.py`](tests/integration/test_full_stack.py))
+  that starts an actual `gateway-go` + `ml-service` pair and drives them
+  end-to-end over real HTTP/gRPC.
 - **`docker-build.yml`** — builds both Dockerfiles on GitHub's runners, the
   first real verification either one builds at all (no Docker daemon exists
   in this project's own development environment — see

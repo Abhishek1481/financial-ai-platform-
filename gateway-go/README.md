@@ -6,7 +6,7 @@ streaming, caching (later phases) — never ML/NLP itself, which is
 `ml-service`'s job exclusively (see [`/docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md)
 for why the boundary is drawn this way).
 
-## Status (Phase 16)
+## Status (Phase 20)
 
 Phase 4 built the skeleton (HTTP lifecycle, logging, health/metrics).
 Phase 5 added JWT auth and RBAC. Phase 6 added document ingestion: upload,
@@ -93,6 +93,17 @@ hasn't happened yet. **Caveat**: this Dockerfile/Compose setup was
 authored and reviewed carefully but is unverified by an actual
 `docker compose up` — no Docker daemon is available in this development
 environment (see `docker/README.md`).
+
+Phases 17-19 (Kubernetes manifests, Terraform, CI/CD) are infrastructure
+and pipeline work outside this service's own code — see `/k8s/README.md`,
+`/terraform/README.md`, and the top-level README's CI/CD section. Phase
+20 (Tests) adds `internal/cache`/`ratelimit`/`conversation`'s
+`Benchmark*` functions (`go test ./internal/... -bench=.`),
+`tests/integration/test_full_stack.py` (a real `gateway-go` + `ml-service`
+pair driven end-to-end, now its own CI job), and `tests/load` — a
+dependency-free Go load-test tool with real recorded numbers (~3,100
+req/s on `/healthz`, p50 1.2ms/p95 33ms, single development machine) —
+see `/tests/README.md` for the full picture.
 
 ```
 POST /api/v1/auth/register   {email, password} -> 201 {id, email, role}   (always role "user")
